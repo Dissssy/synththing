@@ -75,6 +75,10 @@ ebur128 = "0.1.11"                                        # songs' loudness, to 
 # Android with the native-activity backend and what that allows (not
 # accesskit, which needs the game-activity one).
 percent-encoding = "2"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] } # local time for scripts (script_clock.rs) and recording names
+noise = { version = "0.9", default-features = false }                      # noise() for scripts (script_math.rs)
+rand = { version = "0.8", default-features = false }                       # random(seed) generators for scripts (script_math.rs)
+rand_xorshift = "0.3"                                                       # their algorithm, the same on every platform and version
 [target.'cfg(not(target_os = "android"))'.dependencies]
 eframe = "0.37"
 rfd = "0.15"                                              # native file and folder dialogs
@@ -96,7 +100,7 @@ winresource = "0.1"                                         # the icon, embedded
 [target.'cfg(windows)'.dependencies]
 tray-icon = { version = "0.24", default-features = false }  # the notification-area icon (tray.rs)
 raw-window-handle = "0.6"                                   # the window's HWND, which the media controls need (media_controls.rs)
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console", "Win32_System_SystemInformation"] }  # re-attach to the terminal for CLI use; local time for recording names
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Console"] }  # re-attach to the terminal for CLI use
 windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }  # the Start menu shortcut (install.rs); the mini player out of the taskbar and the cursor (app/mini_player.rs)
 windows-registry = "0.6"                                    # the uninstall entry and starting with Windows (install.rs)
 
