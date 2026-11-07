@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.7.0 (2026-11-07)
+
 ### Added
 - Preferences > App > Window > Redraws while playing (desktop): how many times a second the window redraws while a song plays, so the seek bar and time can move smoothly without the mouse over the window. 5 a second unless changed, as before.
 - Follow playback (the crosshair button atop Songs and a playlist): the list keeps the playing song in view, scrolling to each song as it starts. Scrolling the list yourself turns it off. It never switches to another list or view.
