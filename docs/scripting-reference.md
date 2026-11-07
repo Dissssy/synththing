@@ -177,6 +177,22 @@ blit(pixels, width, height, palette, [x], [y], [w], [h])   -- a palette-indexed 
 
 `blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (a bundled game) draws its whole view with one `blit` a frame. Since 1.5.0.
 
+### The app's theme
+
+<!-- api: theme -->
+```lua
+theme() -> theme   -- the app theme's colors, to match the look the user picked (the default theme in previews) (since next)
+```
+<!-- /api -->
+
+```lua
+local t = theme()
+clear(t.background)
+text(4, 4, "Now playing", t.accent)
+```
+
+`theme()` gives the colors of the theme picked in the app (Themes window), so a visualizer can sit in the app like part of it: `background`, `window`, `text`, `weak_text`, `accent`, `playing` and the rest are listed under Tables (`Theme`), plus its `name` and whether it's `dark`. It follows the user changing theme right away. Previews and command-line runs always get the default Dark theme, so they look the same everywhere.
+
 ### Moving and clipping
 
 <!-- api: translate clip push_view pop_view -->
@@ -459,18 +475,19 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 
 ## Playback & timing
 
-<!-- api: playback set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
+<!-- api: playback song_details set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
 ```lua
-playback() -> playback    -- what's playing and where, times in song seconds (since 0.1.1)
-set_paused(paused)        -- pause or resume playback (applied after this frame) (since 0.1.4)
-seek(seconds)             -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
-set_speed(speed)          -- playback speed (applied after this frame) (since 0.2.0)
-                          -- speed: 1.0 is normal
-script_options(options)   -- once, at the top: how the app treats this script (since 0.2.0)
-DT                        -- seconds since the previous render() call (0.0 on the first, at most 0.25) (since 0.1.1)
-TIME                      -- seconds since this script started, wall clock, uncapped (since 0.1.4)
-FRAME                     -- frames rendered since this script started (1 on the first) (since 0.1.4)
-SAMPLE_RATE               -- the engine's sample rate, in Hz (since 0.1.1)
+playback() -> playback      -- what's playing and where, times in song seconds (since 0.1.1)
+song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since next)
+set_paused(paused)          -- pause or resume playback (applied after this frame) (since 0.1.4)
+seek(seconds)               -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
+set_speed(speed)            -- playback speed (applied after this frame) (since 0.2.0)
+                            -- speed: 1.0 is normal
+script_options(options)     -- once, at the top: how the app treats this script (since 0.2.0)
+DT                          -- seconds since the previous render() call (0.0 on the first, at most 0.25) (since 0.1.1)
+TIME                        -- seconds since this script started, wall clock, uncapped (since 0.1.4)
+FRAME                       -- frames rendered since this script started (1 on the first) (since 0.1.4)
+SAMPLE_RATE                 -- the engine's sample rate, in Hz (since 0.1.1)
 ```
 <!-- /api -->
 
@@ -535,6 +552,13 @@ function render(width, height, left, right)
 end
 ```
 
+`song_details()` is what the library knows of the playing song, with the user's edits over what the file says: `title`, `album`, `year`, its `artist`, `genre` and `tag` names as lists, whether it's `starred`, its `plays`, `skips` and `last_played` (Unix seconds, so `format_time("%d %b", d.last_played)` works) and the rest under Tables (`SongDetails`; the keys are the ones song name patterns use). A field the library doesn't know is nil, and the whole thing is nil for a song that isn't in the library (or in previews and command-line runs). It follows changes as they happen, like starring the song.
+
+```lua
+local d = song_details()
+if d and d.starred then text(4, 4, "* " .. (d.title or ""), theme().star) end
+```
+
 `script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto`, `transparent` and `assets`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, the clear color for `transparent`, and Assets for `assets`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
@@ -544,6 +568,60 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 `DT` is for frame-rate-independent animation (e.g. a smooth sweep or a moving player), not for gating logic, a visualizer should look right regardless of how fast frames are actually arriving.
 
 `render()` only runs while the visualizer is on screen: not while its tab is closed or hidden behind another tab, and not while Preferences is open (the visualizer freezes on its last frame, and playback pauses). `DT` is capped at 0.25 so the first frame back after a gap like that doesn't make animations jump.
+
+## Noise & easing
+
+<!-- api: noise ease random -->
+```lua
+noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since next)
+ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since next)
+                              -- curve: "linear", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce; t: 0 to 1, clamped
+random(seed) -> generator     -- a random number generator of its own, apart from math.random (since next)
+                              -- seed: the same seed always gives the same numbers
+```
+<!-- /api -->
+
+```lua
+-- a wandering line: each point's height drifts smoothly over time
+for x = 0, width - 1, 4 do
+    local y = height / 2 + noise(x * 0.01, TIME * 0.5) * height / 3
+    pixel(x, math.floor(y), {r=120, g=200, b=255})
+end
+
+-- a dot that slides across in one second and settles in, then starts over
+local t = TIME % 1.5
+circle(ease("out_back", t) * (width - 40) + 20, 20, 8, {r=255, g=180, b=60})
+```
+
+`noise` is simplex noise: nearby inputs give nearby values, so stepping one input slowly (time, or a position times a small scale) gives smooth drift. It's the same field for every script and every run, recordings included; offset the inputs (`noise(x + 100, y)`) for a different-looking one. Adding a few layers at doubling scales and halving strengths (`noise(x) + noise(x * 2) / 2 + noise(x * 4) / 4`) gives rougher, more natural shapes.
+
+`random(seed)` makes a generator of its own: `gen:next()` works like `math.random()` (a float from 0 up to 1, `gen:next(6)` a whole number 1 to 6, `gen:next(10, 20)` one from 10 to 20), and the same seed always gives the same numbers, so a starfield or a layout made from it comes out the same on every run without touching `math.random`.
+
+In a recording (and so in previews) `math.random` itself is seeded from the song too, so re-recording the same song gives the same video, random-looking parts included. Outside a recording it's truly random.
+
+`ease` bends a 0-to-1 progress into a curve: `in_` curves start slow, `out_` ones end slow, `in_out_` both. `back` overshoots a little and comes back, `elastic` springs and `bounce` lands like a ball, so those go past 0 or 1 on the way.
+
+## Date & time
+
+<!-- api: now unix_time format_time -->
+```lua
+now([utc]) -> date                    -- today's date and the time of day; recording time in a recording (since next)
+                                      -- utc: true for UTC, local time if not given
+unix_time() -> seconds                -- seconds since 1970 (UTC), fractional; recording time in a recording (since next)
+format_time(format, [time]) -> text   -- a date as text (since next)
+                                      -- format: strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p...; time: a unix_time() or now() result, now if not given
+```
+<!-- /api -->
+
+```lua
+local t = now()                                   -- t.hour, t.minute, t.weekday...
+text(4, 4, format_time("%H:%M:%S"), {r=255, g=255, b=255})
+text(4, 18, format_time("%A %e %B %Y", t), {r=180, g=180, b=180})
+```
+
+Scripts can't reach Lua's `os` library, so these are how they tell the time. `now()` gives a `Date` table in local time (`now(true)` for UTC), `unix_time()` the seconds since 1970, and `format_time` turns either into text with strftime codes (`%H:%M`, `%I:%M %p`, `%a %d %b`...); a code it doesn't know is an error.
+
+In a recording (and so in previews) the clock is recording time: it reads the moment the recording began and moves on with the recorded frames, so a clock drawn into the video shows what it would have shown played live, however fast the video renders.
 
 ## Recording
 
@@ -596,14 +674,16 @@ Render and `run-script --video` work the same way: the frames a script spends pr
 
 ## Playlist
 
-<!-- api: playlist play_track next_track previous_track set_loop set_shuffle -->
+<!-- api: playlist up_next play_track next_track previous_track set_loop set_shuffle -->
 ```lua
-playlist() -> playlist   -- the current playlist, read-only, or nil (since 0.2.0)
-play_track(index)        -- play the current playlist's index-th song (since 0.2.0)
-next_track()             -- the Next button (since 0.2.0)
-previous_track()         -- the Previous button (since 0.2.0)
-set_loop(mode)           -- the Loop mode (since 0.2.0)
-set_shuffle(on)          -- shuffle the playlist or not (since 0.2.0)
+playlist() -> playlist      -- the current playlist, read-only, or nil (since 0.2.0)
+up_next([count]) -> songs   -- what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it (since next)
+                            -- count: at most this many, all if not given
+play_track(index)           -- play the current playlist's index-th song (since 0.2.0)
+next_track()                -- the Next button (since 0.2.0)
+previous_track()            -- the Previous button (since 0.2.0)
+set_loop(mode)              -- the Loop mode (since 0.2.0)
+set_shuffle(on)             -- shuffle the playlist or not (since 0.2.0)
 ```
 <!-- /api -->
 
@@ -613,6 +693,14 @@ A script can see the current playlist and move between its songs, enough to draw
 - `playing`: whether it's the one playing (rather than only open)
 - `current`: the index of the song playing from it, or nil
 - `entries`: its songs in order, each `{name, length, missing}`; `length` is in seconds once it's been read (nil until then), `missing` is true for a song whose file isn't there any more
+
+`up_next()` is what plays after the song playing, in order: every song in the queue (`queued` true), then what the playlist, album or Songs list with Autoplay plays after them, as far ahead as the Queue page shows (Preferences' Songs coming up). Each is `{name, title, artist, album, length, queued}`; `name` is how the app shows the song, the rest are nil where the library doesn't know them. `up_next(3)` gives at most the first 3. It's an empty list when nothing comes next, and in previews and command-line runs.
+
+```lua
+for i, song in ipairs(up_next(3)) do
+    text(10, 10 + i * 14, (song.queued and "Queued: " or "Then: ") .. song.name, theme().weak_text)
+end
+```
 
 `play_track` starts the playlist from that song, as clicking it does; an index past the end is an error. `next_track` and `previous_track` do what the app's buttons do (previous restarts the song if it's been playing a little while), and follow the loop and shuffle modes. `set_loop` and `set_shuffle` change the same modes as the buttons; `playback()` reports them as `loop_mode` and `shuffle`. Like `set_paused`, these happen right after the frame. The volume stays the user's.
 
@@ -1169,6 +1257,100 @@ SongNote                -- a whole note of the song (notes_between()), times in 
     velocity: integer
     start: number
     stop: number
+
+UpNextSong            -- a song coming up (up_next())
+    name: string      -- as the app shows it
+    title?: string
+    artist?: string
+    album?: string
+    length?: number   -- seconds
+    queued: boolean   -- in the queue, rather than what plays after it
+
+SongDetails                        -- what the library knows of a song (song_details()), with the user's edits; a field it doesn't know is nil. Keys are the ones song name patterns use
+    title?: string
+    artist?: string[]              -- a song can be by several
+    album_artist?: string[]
+    album?: string
+    composer?: string[]
+    genre?: string[]
+    track?: integer
+    disc?: integer
+    year?: integer
+    grouping?: string
+    comment?: string
+    length?: number                -- seconds
+    bpm?: number
+    notes?: integer                -- a MIDI file's
+    file_name?: string             -- without its extension
+    file_extension?: string        -- lowercase
+    size?: number                  -- MB
+    bit_rate?: number              -- kbps
+    sample_rate?: integer
+    imported?: integer             -- when it came into the library, Unix seconds
+    tag?: string[]                 -- its tags' names
+    starred: boolean
+    compilation: boolean
+    composer_as_artist: boolean
+    sort_title?: string
+    sort_album?: string
+    sort_artist?: string
+    sort_album_artist?: string
+    sort_composer?: string
+    start_time?: number            -- seconds
+    stop_time?: number             -- seconds
+    volume_adjust?: number         -- -100 to 100 (%)
+    skip_shuffle: boolean
+    remember_position: boolean
+    musicbrainz_release?: string
+    added_by?: string              -- the Local API program that added it
+    matched: boolean
+    album_matched: boolean
+    loudness?: number              -- LUFS
+    plays?: integer                -- on every device
+    skips?: integer
+    last_played?: integer          -- Unix seconds
+    last_skipped?: integer         -- Unix seconds
+
+Theme                       -- the app theme's colors (theme())
+    name: string
+    dark: boolean           -- a dark theme rather than a light one
+    background: Color       -- behind the tabs and panels
+    window: Color           -- windows, popups and menus
+    faint: Color            -- subtle stripes and highlights
+    deep: Color             -- text fields and the deepest backgrounds
+    text: Color             -- labels and other text
+    widget_text: Color      -- text on buttons and in fields
+    strong_text: Color      -- headings, and text being hovered
+    weak_text: Color        -- secondary text
+    selection: Color        -- selected items
+    accent: Color           -- focus outlines, checkmarks and slider fills
+    link: Color
+    warning: Color
+    error: Color
+    code: Color             -- behind inline code
+    widget: Color           -- buttons and fields
+    widget_hovered: Color   -- a button being hovered
+    widget_pressed: Color   -- a button being pressed
+    widget_outline: Color   -- around a widget being hovered or pressed
+    border: Color           -- separators and borders
+    playing: Color          -- the playing song, in lists
+    star: Color             -- starred songs, in lists
+
+Random                                                          -- a seeded generator (random()): gen:next() a float in [0, 1), gen:next(m) a whole number 1 to m, gen:next(m, n) m to n
+    next: fun(self: Random, m?: integer, n?: integer): number   -- the next number, like math.random
+
+Date                      -- a date and time of day (now())
+    year: integer
+    month: integer        -- 1 to 12
+    day: integer          -- 1 to 31
+    hour: integer         -- 0 to 23
+    minute: integer       -- 0 to 59
+    second: integer       -- 0 to 59
+    ms: integer           -- 0 to 999
+    weekday: integer      -- 1 is Monday, 7 is Sunday
+    yearday: integer      -- 1 is 1 January
+    utc_offset: integer   -- seconds ahead of UTC
+    unix: number          -- the same moment as unix_time()
 
 AlbumArt              -- the playing song's art (album_art())
     sprite: integer

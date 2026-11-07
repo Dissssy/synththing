@@ -7,6 +7,16 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Lyrics (View > Lyrics, a page on phones, and a page in the mini player): the playing song's lyrics, from an `.lrc` file of the same name beside the song (kept with the song when it's imported) or from the lyrics in its tags. Timed lyrics follow the song: the line being sung is marked and kept in view, with a bar under it for how far through it the song is, and clicking a line plays from it. Right-click it for line mode: 1 to 5 lines with the one being sung in the middle, the panel made exactly that tall. Words' own times in enhanced LRC are left out for now. Go to it with Ctrl+G, Y.
 - Song info > Options > Lyrics offset: moves a song's timed lyrics later (or sooner, below zero) when they're off from the recording. Synced like the song's other options.
+- Visualizer scripts can tell the time: `now()` gives today's date and the time of day (local, or UTC), `unix_time()` the seconds since 1970, and `format_time("%H:%M")` turns either into text. In a recording the clock is recording time, so a clock drawn into the video reads as it would have live.
+- Visualizer scripts get `noise(x, y, z)`, smooth simplex noise, and `ease("out_cubic", t)`, the common easing curves (sine, quad, cubic, quart, quint, expo, circ, back, elastic, bounce, each in, out or in-out).
+- New script > Examples > Everything: a page that calls the script API and shows what each part gives back, to see it all working at once.
+- Visualizer scripts can show what's coming up with `up_next()`: the queue's songs, then what the playlist, album or Autoplay plays after them.
+- Visualizer scripts can read what the library knows of the playing song with `song_details()`: your edits, tags, whether it's starred, its plays and skips, when it was last played and every other song field, kept up to date as they change.
+- Visualizer scripts can read the app theme's colors with `theme()` (background, text, accent, the playing song's color and the rest), to match the look you picked.
+- Visualizer scripts can make seeded random generators with `random(seed)`, which give the same numbers for the same seed. In a recording `math.random` is seeded from the song as well, so recording the same song twice gives the same video.
+
+### Fixed
+- Recordings on Linux and macOS are named with the local time instead of UTC.
 
 ## 2.7.0 (2026-11-07)
 
