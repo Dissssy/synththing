@@ -76,7 +76,7 @@ pub fn album_of(key: &str, song: &song_store::Song, ignore: &str) -> String {
 }
 
 fn is_midi(name: &str) -> bool {
-    Path::new(name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
+    crate::midi_notes::is_midi(Path::new(name))
 }
 
 /// The library's albums (of songs here that aren't MIDI), the largest

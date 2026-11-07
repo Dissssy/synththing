@@ -95,13 +95,18 @@ impl App {
                 ui.add_space(ui.clip_rect().height() / 3.0);
                 for (i, line) in lyrics.lines.iter().enumerate() {
                     let text = if line.text.is_empty() { " " } else { &line.text };
-                    let mut rich = egui::RichText::new(text).size(text_size(ui));
-                    rich = match current {
-                        Some(c) if c == i => rich.strong().color(playing),
-                        Some(c) if c > i => rich.weak(),
-                        _ => rich,
+                    let font = egui::FontId::proportional(text_size(ui));
+                    let color = match current {
+                        Some(c) if c == i => ui.visuals().strong_text_color(),
+                        Some(c) if c > i => ui.visuals().weak_text_color(),
+                        _ => ui.visuals().text_color(),
                     };
-                    let label = egui::Label::new(rich).wrap();
+                    // (The line being sung: its words sung so far, else all of it.)
+                    let sung = if current == Some(i) { line.sung(position).unwrap_or(line.text.len()) } else { 0 };
+                    let mut job = sung_job(text, sung, font, playing, color);
+                    job.wrap.max_width = ui.available_width();
+                    job.halign = egui::Align::Center;
+                    let label = egui::Label::new(job).wrap();
                     let response = match line.at {
                         Some(at) => {
                             let response = ui.add(label.sense(egui::Sense::click())).on_hover_cursor(egui::CursorIcon::PointingHand);
@@ -148,6 +153,19 @@ impl App {
     }
 }
 
+/// A line's text, its first `sung` bytes in `sung_color` and the rest in
+/// `color`.
+fn sung_job(text: &str, sung: usize, font: egui::FontId, sung_color: egui::Color32, color: egui::Color32) -> egui::text::LayoutJob {
+    let sung = (0..=sung.min(text.len())).rev().find(|&i| text.is_char_boundary(i)).unwrap_or(0);
+    let mut job = egui::text::LayoutJob::default();
+    for (part, color) in [(&text[..sung], sung_color), (&text[sung..], color)] {
+        if !part.is_empty() {
+            job.append(part, 0.0, egui::TextFormat::simple(font.clone(), color));
+        }
+    }
+    job
+}
+
 /// The most lines line mode shows.
 pub const MAX_LINES: u8 = 5;
 
@@ -190,20 +208,23 @@ fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_he
     for row in 0..n {
         let index = first + row as isize;
         let line = usize::try_from(index).ok().and_then(|i| lyrics.lines.get(i));
-        let (text, color) = match line {
-            Some(line) if Some(index as usize) == current => (line.text.as_str(), playing),
-            Some(line) => (line.text.as_str(), ui.visuals().weak_text_color()),
-            None if row == middle && lyrics.timed => ("♪", ui.visuals().weak_text_color()),
-            None if row == middle => ("These lyrics aren't timed", ui.visuals().weak_text_color()),
+        let weak = ui.visuals().weak_text_color();
+        let (text, sung, color) = match line {
+            Some(line) if Some(index as usize) == current => {
+                (line.text.as_str(), line.sung(position).unwrap_or(line.text.len()), ui.visuals().strong_text_color())
+            }
+            Some(line) => (line.text.as_str(), 0, weak),
+            None if row == middle && lyrics.timed => ("♪", 0, weak),
+            None if row == middle => ("These lyrics aren't timed", 0, weak),
             None => continue,
         };
-        let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font.clone(), color);
+        let mut job = sung_job(text, sung, font.clone(), playing, color);
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 16.0);
         let galley = painter.layout_job(job);
         // (The bar sits under the middle row, pushing the rows after down.)
         let below = if row > middle { BAR_ROOM } else { 0.0 };
         let center = egui::pos2(rect.center().x, top + (row as f32 + 0.5) * line_height + below);
-        painter.galley(center - galley.size() / 2.0, galley, color);
+        painter.galley(center - galley.size() / 2.0, galley, weak);
     }
     if let Some(i) = current {
         progress_bar(ui, egui::pos2(rect.center().x, top + (middle + 1) as f32 * line_height + 1.0), lyrics.progress(i, position, length));

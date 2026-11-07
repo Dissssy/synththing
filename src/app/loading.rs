@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 
 use eframe::egui;
 
-use super::{is_midi_path, App};
+use super::App;
 use crate::audio::AudioCommand;
 use crate::config::nice_name;
 use crate::loader::{Asset, AssetKind, LoadState, Priority};
@@ -52,7 +52,7 @@ pub(super) struct PendingPlay {
 const PRELOAD_AHEAD: usize = 2;
 
 fn song_kind(path: &Path) -> AssetKind {
-    if is_midi_path(path) { AssetKind::Midi } else { AssetKind::Audio }
+    if crate::midi_notes::is_midi(path) { AssetKind::Midi } else { AssetKind::Audio }
 }
 
 impl App {
@@ -63,7 +63,7 @@ impl App {
     /// The soundfont `song` should play with: none for plain audio, else
     /// its override, else the selected one.
     pub(super) fn soundfont_for(&self, song: &Path, soundfont_override: Option<&Path>) -> Option<PathBuf> {
-        if !is_midi_path(song) {
+        if !crate::midi_notes::is_midi(song) {
             return None;
         }
         soundfont_override.map(Path::to_path_buf).or_else(|| self.selected_soundfont())

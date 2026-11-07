@@ -465,7 +465,7 @@ impl<'a> Facts<'a> {
 
     /// Whether it's a MIDI file.
     pub fn is_midi(&self) -> bool {
-        Path::new(self.file_name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
+        crate::midi_notes::is_midi(Path::new(self.file_name))
     }
 
     pub fn has_tag(&self, id: &str) -> bool {

@@ -143,9 +143,8 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
 pub(crate) const SONG_EXTENSIONS: &[&str] = &[
-    "mid", "midi", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
+    "mid", "midi", "kar", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
 ];
-const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
 /// The songs listed and added from folders: MIDI files, plus audio files
 /// when that's turned on in Preferences.
@@ -1521,8 +1520,3 @@ fn fmt_time(secs: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
-fn is_midi_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
-}

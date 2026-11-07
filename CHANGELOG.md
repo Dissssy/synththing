@@ -5,7 +5,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
-- Lyrics (View > Lyrics, a page on phones, and a page in the mini player): the playing song's lyrics, from an `.lrc` file of the same name beside the song (kept with the song when it's imported) or from the lyrics in its tags. Timed lyrics follow the song: the line being sung is marked and kept in view, with a bar under it for how far through it the song is, and clicking a line plays from it. Right-click it for line mode: 1 to 5 lines with the one being sung in the middle, the panel made exactly that tall. Words' own times in enhanced LRC are left out for now. Go to it with Ctrl+G, Y.
+- Lyrics (View > Lyrics, a page on phones, and a page in the mini player): the playing song's lyrics, from an `.lrc` file of the same name beside the song (kept with the song when it's imported) or from the lyrics in its tags. Timed lyrics follow the song: the line being sung is marked and kept in view, with a bar under it for how far through it the song is, and clicking a line plays from it. Right-click it for line mode: 1 to 5 lines with the one being sung in the middle, the panel made exactly that tall. Where the lyrics time each word (enhanced LRC's `<mm:ss.xx>` word times, a MIDI file's syllables), the line being sung fills in word by word. Go to it with Ctrl+G, Y.
+- MIDI files' own lyrics show in Lyrics, syllable by syllable, and karaoke `.kar` files play and show their words.
 - Song info > Options > Lyrics offset: moves a song's timed lyrics later (or sooner, below zero) when they're off from the recording. Synced like the song's other options.
 
 ## 2.7.0 (2026-11-07)

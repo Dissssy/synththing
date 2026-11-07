@@ -151,10 +151,7 @@ impl Stage {
     ) -> Result<(), String> {
         let name = nice_name(song);
         self.visualizer.set_art(song, crate::album_art::for_script(art, false).map(Arc::new));
-        let is_midi = song
-            .extension()
-            .and_then(|e| e.to_str())
-            .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
+        let is_midi = crate::midi_notes::is_midi(song);
         if !is_midi {
             let audio =
                 loader::load_audio_file(song).map_err(|e| format!("couldn't read {}: {e}", song.display()))?;
