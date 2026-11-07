@@ -1,7 +1,9 @@
 //! A song's lyrics, for the Lyrics panel: timed (LRC) where the source has
 //! times, else plain text. Read off the UI thread when a song starts
 //! (`App::lyrics`), from, in order: an `.lrc` file beside the song (same
-//! name), then the lyrics in its tags (which are often LRC too).
+//! name), then the library's copy of one (`stored`: the `.lrc` beside a
+//! song when it was imported), then the lyrics in its tags (which are
+//! often LRC too).
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -9,7 +11,8 @@ use std::path::{Path, PathBuf};
 /// Where a song's lyrics came from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Source {
-    /// An `.lrc` file beside the song.
+    /// An `.lrc` file beside the song, or beside it when it was
+    /// imported.
     File,
     /// The song's own tags.
     Tags,
@@ -87,12 +90,37 @@ impl Lyrics {
 
 /// The song at `path`'s lyrics, if it has any (on the lyrics thread).
 pub fn read(path: PathBuf) -> Option<Lyrics> {
-    if let Ok(text) = std::fs::read_to_string(path.with_extension("lrc"))
-        && let Some(lyrics) = Lyrics::parse(&text, Source::File)
-    {
+    let library = crate::config::music_dir().ok();
+    let stored = library.as_deref().and_then(|dir| crate::song_store::key_in(dir, &path)).and_then(stored);
+    let files = [Some(path.with_extension("lrc")), stored];
+    if let Some(lyrics) = files.iter().flatten().find_map(|f| Lyrics::parse(&std::fs::read_to_string(f).ok()?, Source::File)) {
         return Some(lyrics);
     }
     tagged(&path).and_then(|text| Lyrics::parse(&text, Source::Tags))
+}
+
+/// Where the library keeps the song `key`'s lyrics: in a folder of their
+/// own, as the song store takes every `<hash>.<ext>` in its own for a song.
+pub fn stored(key: &str) -> Option<PathBuf> {
+    Some(crate::config::config_dir().ok()?.join("lyrics").join(format!("{key}.lrc")))
+}
+
+/// Keep the `.lrc` beside `file` (if there is one) as the lyrics of the
+/// song it was imported as (`key`), unless it has some already.
+pub fn import(file: &Path, key: &str) {
+    let lrc = file.with_extension("lrc");
+    let Some(to) = stored(key).filter(|to| lrc.is_file() && !to.exists()) else { return };
+    let copied = to.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| std::fs::copy(&lrc, &to));
+    if let Err(e) = copied {
+        log::warn!("couldn't keep the lyrics in {}: {e}", lrc.display());
+    }
+}
+
+/// Forget the song `key`'s lyrics, as it leaves the library.
+pub fn forget(key: &str) {
+    if let Some(path) = stored(key) {
+        let _ = std::fs::remove_file(path);
+    }
 }
 
 /// The lyrics in an audio file's tags.

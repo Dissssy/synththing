@@ -642,6 +642,7 @@ impl SongStore {
                 return;
             }
         }
+        crate::lyrics::forget(key);
         self.present.remove(key);
         Arc::make_mut(&mut self.songs).remove(key);
         if self.blocked.remove(key) {
@@ -1341,6 +1342,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
         let stored = if file.starts_with(dir) { move_in(file, dir) } else { copy_in(file, dir) };
         match stored {
             Ok(stored) => {
+                crate::lyrics::import(file, &stored.key);
                 keys.insert(file.to_path_buf(), stored.key.clone());
                 done.moved.push((file.to_path_buf(), path_of(dir, &stored.key)));
                 let key = stored.key.clone();
