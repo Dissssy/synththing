@@ -59,17 +59,19 @@ const RESIZE_FRAMES: u8 = 30;
 enum Page {
     #[default]
     Queue,
+    Lyrics,
     Groupings,
     Soundfonts,
     Visualizer,
 }
 
 impl Page {
-    const ALL: [Self; 4] = [Self::Queue, Self::Groupings, Self::Soundfonts, Self::Visualizer];
+    const ALL: [Self; 5] = [Self::Queue, Self::Lyrics, Self::Groupings, Self::Soundfonts, Self::Visualizer];
 
     fn icon(self) -> &'static str {
         match self {
             Self::Queue => "queue",
+            Self::Lyrics => "microphone-stage",
             Self::Groupings => "squares-four",
             Self::Soundfonts => "piano-keys",
             Self::Visualizer => "waveform",
@@ -79,6 +81,7 @@ impl Page {
     fn title(self) -> &'static str {
         match self {
             Self::Queue => "Queue",
+            Self::Lyrics => "Lyrics",
             Self::Groupings => "Groupings",
             Self::Soundfonts => "Soundfonts",
             Self::Visualizer => "Visualizer",
@@ -531,6 +534,7 @@ impl App {
         page_ui.set_clip_rect(page.intersect(ui.clip_rect()));
         match self.mini.page {
             Page::Queue => self.queue_ui(&mut page_ui),
+            Page::Lyrics => self.lyrics_ui(&mut page_ui, &shared.view),
             Page::Groupings => self.groupings_ui(&mut page_ui),
             Page::Soundfonts => self.soundfont_ui(&mut page_ui),
             Page::Visualizer => self.mini_visualizer_ui(&mut page_ui, shared),

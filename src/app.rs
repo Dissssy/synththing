@@ -83,6 +83,7 @@ mod controls_bar;
 mod soundfonts_panel;
 mod help;
 mod log_panel;
+mod lyrics;
 mod updates;
 mod credits_window;
 mod dock;
@@ -603,6 +604,8 @@ pub struct App {
     /// The song playing's art (`now_playing_art_ui`): a phone's Now
     /// playing, the mini player.
     now_playing_art: crate::album_art::AlbumArt,
+    /// The playing song's lyrics (`lyrics.rs`).
+    lyrics: lyrics::LyricsState,
 }
 
 impl App {
@@ -852,6 +855,7 @@ impl App {
             last_recording: None,
             mobile_state: mobile::Mobile::default(),
             now_playing_art: crate::album_art::AlbumArt::default(),
+            lyrics: lyrics::LyricsState::default(),
         };
         #[cfg(windows)]
         if offer_install {

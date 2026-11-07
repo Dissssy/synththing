@@ -315,6 +315,7 @@ impl App {
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Queue => app.queue_ui(ui),
+            Section::Lyrics => app.lyrics_ui(ui, &shared.view),
             Section::Wishlist => app.wishlist_ui(ui),
             Section::Apps => app.apps_ui(ui),
             Section::Visualizer => {

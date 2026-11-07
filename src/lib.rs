@@ -64,6 +64,7 @@ mod layout;
 mod library;
 mod lookup;
 mod loudness;
+mod lyrics;
 mod live;
 mod loader;
 mod lua_analysis;

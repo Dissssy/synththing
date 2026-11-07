@@ -4,6 +4,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Lyrics (View > Lyrics, a page on phones, and a page in the mini player): the playing song's lyrics, from an `.lrc` file of the same name beside the song or from the lyrics in its tags. Timed lyrics follow the song: the line being sung is marked and kept in view, and clicking a line plays from it. Squeezed to a row or two tall, the panel shows only the line being sung with a bar for how far through it the song is. Go to it with Ctrl+G, Y.
+- Song info > Options > Lyrics offset: moves a song's timed lyrics later (or sooner, below zero) when they're off from the recording. Synced like the song's other options.
+
 ## 2.7.0 (2026-11-07)
 
 ### Added
