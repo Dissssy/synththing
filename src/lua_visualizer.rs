@@ -6940,7 +6940,7 @@ function render(w, h, l, r) frames = frames + 1; log('frame ' .. frames) end";
             local full = image_load('red.png')
             local small = image_load('red.png', 2)
             local _, why = image_load('junk.png')
-            if full and small then
+            if full and small and why then
                 log(full.width .. 'x' .. full.height .. ' ' .. small.width .. 'x' .. small.height .. ' ' .. full.color.r .. ' ' .. tostring(image_load('missing.png')) .. ' ' .. tostring(why ~= nil))
                 sprite(full.sprite, 0, 0)
             else
