@@ -1717,7 +1717,7 @@ fn song_file(library: &Library, key: &str, range: Option<&str>) -> Result<Respon
         "ogg" | "oga" | "opus" => "audio/ogg",
         "wav" => "audio/wav",
         "m4a" | "mp4" | "aac" => "audio/mp4",
-        "mid" | "midi" => "audio/midi",
+        "mid" | "midi" | "kar" => "audio/midi",
         _ => "application/octet-stream",
     };
     // (RFC 6266's filename*, for names past ASCII, after a plain one for

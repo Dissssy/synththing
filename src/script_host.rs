@@ -123,6 +123,7 @@ enum Message {
     SetStreaming(bool),
     SetTheme(Box<crate::theme::Theme>),
     SetSongDetails(Option<crate::script_song::SongDetails>),
+    SetLyrics(crate::script_lyrics::ScriptLyrics),
     SetUpNext(Vec<crate::script_queue::UpNextSong>),
     /// Read the script's variables now and then, as far as the request
     /// opens them (the Debug window shows them), or stop (`None`).
@@ -425,6 +426,12 @@ impl ScriptHost {
         }
     }
 
+    /// The playing song's lyrics and their offset, for `lyrics()` (the
+    /// app sends them when they change).
+    pub fn set_lyrics(&self, lyrics: crate::script_lyrics::ScriptLyrics) {
+        self.send(Message::SetLyrics(lyrics));
+    }
+
     /// What plays after the song playing, for `up_next()` (the app
     /// sends it when it changes).
     pub fn set_up_next(&self, songs: Vec<crate::script_queue::UpNextSong>) {
@@ -678,6 +685,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         Message::SetStreaming(on) => visualizer.set_streaming(on),
         Message::SetTheme(theme) => visualizer.set_theme(*theme),
         Message::SetSongDetails(details) => visualizer.set_song_details(details),
+        Message::SetLyrics(lyrics) => visualizer.set_lyrics(lyrics),
         Message::SetUpNext(songs) => visualizer.set_up_next(songs),
         Message::WatchState(_) => {} // (handled by the worker)
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),

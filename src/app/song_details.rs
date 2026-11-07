@@ -60,7 +60,7 @@ impl Tab {
         match self {
             Tab::Details => "Title, artist, album and the rest",
             Tab::Sorting => "What the names sort as",
-            Tab::Options => "Start, stop, volume, plays",
+            Tab::Options => "Start, stop, volume, lyrics, plays",
             Tab::Tags => "Star it, tag it",
             Tab::File => "Everything the file says",
         }
@@ -320,13 +320,17 @@ impl App {
                         }
                     }
                     let hint = if *mixed && !changes.contains_key(&field) { "Mixed" } else { "" };
-                    if field == Field::VolumeAdjust {
+                    if matches!(field, Field::VolumeAdjust | Field::LyricsOffset) {
                         // (A slider; at 0 while the songs differ, till it's moved.)
-                        let mut percent = fields::Facts { edits: Some(&[(field, text.clone())].into()), ..Facts::default() }.number(field).unwrap_or(0.0);
-                        let slider = egui::Slider::new(&mut percent, -100.0..=100.0).suffix("%").step_by(1.0).custom_formatter(|n, _| format!("{n:+.0}"));
+                        let mut n = fields::Facts { edits: Some(&[(field, text.clone())].into()), ..Facts::default() }.number(field).unwrap_or(0.0);
+                        let (range, suffix, step, places) = match field {
+                            Field::VolumeAdjust => (-100.0..=100.0, "%", 1.0, 0),
+                            _ => (-fields::LYRICS_OFFSET..=fields::LYRICS_OFFSET, " s", 0.05, 2),
+                        };
+                        let slider = egui::Slider::new(&mut n, range).suffix(suffix).step_by(step).custom_formatter(move |n, _| format!("{n:+.places$}"));
                         let response = ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(slider)).inner;
                         if response.changed() {
-                            *text = if percent == 0.0 { String::new() } else { format!("{percent:+.0}") };
+                            *text = if n == 0.0 { String::new() } else { format!("{n:+.places$}") };
                             changes.insert(field, Change::Set(text.clone()));
                         }
                         if !hint.is_empty() {

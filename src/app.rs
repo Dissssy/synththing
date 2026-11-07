@@ -83,6 +83,8 @@ mod controls_bar;
 mod soundfonts_panel;
 mod help;
 mod log_panel;
+mod lyrics;
+mod lyrics_lookup;
 mod updates;
 mod credits_window;
 mod dock;
@@ -142,9 +144,8 @@ const VISUALIZER_HEIGHT: usize = 320;
 /// can't, figure out the actual format themselves; this list is just what
 /// shows up in the picker).
 pub(crate) const SONG_EXTENSIONS: &[&str] = &[
-    "mid", "midi", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
+    "mid", "midi", "kar", "wav", "mp3", "ogg", "oga", "opus", "flac", "m4a", "aac", "aif", "aiff", "caf", "mka", "mp2", "wma", "ac3",
 ];
-const MIDI_EXTENSIONS: &[&str] = &["mid", "midi"];
 
 /// The songs listed and added from folders: MIDI files, plus audio files
 /// when that's turned on in Preferences.
@@ -609,6 +610,10 @@ pub struct App {
     /// The song playing's art (`now_playing_art_ui`): a phone's Now
     /// playing, the mini player.
     now_playing_art: crate::album_art::AlbumArt,
+    /// The playing song's lyrics (`lyrics.rs`).
+    lyrics: lyrics::LyricsState,
+    /// Songs' lyrics looked up at LRCLIB (`lyrics_lookup.rs`).
+    lyrics_lookup: lyrics_lookup::LyricsLookup,
 }
 
 impl App {
@@ -860,6 +865,8 @@ impl App {
             last_recording: None,
             mobile_state: mobile::Mobile::default(),
             now_playing_art: crate::album_art::AlbumArt::default(),
+            lyrics: lyrics::LyricsState::default(),
+            lyrics_lookup: lyrics_lookup::LyricsLookup::default(),
         };
         #[cfg(windows)]
         if offer_install {
@@ -1075,6 +1082,7 @@ impl App {
             self.show_window(ctx);
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
+        frame_timing::time("lyrics_tick", || self.lyrics_tick(ctx));
         frame_timing::time("poll_loads", || self.poll_loads());
         frame_timing::time("audio_output", || self.output.tick());
         frame_timing::time("poll_imports", || self.poll_imports(ctx));
@@ -1104,6 +1112,7 @@ impl App {
         let held = self.update_offered();
         frame_timing::time("poll_sync", || self.poll_sync(held));
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
+        frame_timing::time("lyrics_lookup_tick", || self.lyrics_lookup_tick(ctx, held));
         frame_timing::time("background_tick", || self.background_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a
@@ -1525,8 +1534,3 @@ fn fmt_time(secs: f64) -> String {
     format!("{:02}:{:02}", total / 60, total % 60)
 }
 
-fn is_midi_path(path: &Path) -> bool {
-    path.extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
-}

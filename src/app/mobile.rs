@@ -36,6 +36,8 @@ pub(super) enum Page {
     NowPlaying,
     /// The play queue.
     Queue,
+    /// The playing song's lyrics.
+    Lyrics,
     Songs,
     /// The playlists, or a ruleset's (`Groupings::show` says which); the
     /// menu has one for each.
@@ -55,9 +57,10 @@ pub(super) enum Page {
 }
 
 impl Page {
-    const ALL: [Page; 8] = [
+    const ALL: [Page; 9] = [
         Self::NowPlaying,
         Self::Queue,
+        Self::Lyrics,
         Self::Songs,
         Self::Soundfonts,
         Self::Wishlist,
@@ -70,6 +73,7 @@ impl Page {
         match self {
             Self::NowPlaying => "Now playing",
             Self::Queue => "Queue",
+            Self::Lyrics => "Lyrics",
             Self::Songs => "Songs",
             Self::Grouping => "Groupings",
             Self::Soundfonts => "Soundfonts",
@@ -89,6 +93,7 @@ impl Page {
         match self {
             Self::NowPlaying => "monitor-play",
             Self::Queue => "queue",
+            Self::Lyrics => "microphone-stage",
             Self::Songs => "music-notes",
             Self::Grouping => "squares-four",
             Self::Soundfonts => "piano-keys",
@@ -242,6 +247,9 @@ impl App {
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
                 Page::Queue => self.queue_ui(ui),
+                Page::Lyrics => {
+                    self.lyrics_ui(ui, view);
+                }
                 Page::Songs => self.songs_ui(ui),
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),

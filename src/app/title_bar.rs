@@ -242,6 +242,7 @@ impl App {
         section_checkbox(ui, Section::Groupings);
         section_checkbox(ui, Section::Soundfonts);
         section_checkbox(ui, Section::Queue);
+        section_checkbox(ui, Section::Lyrics);
         section_checkbox(ui, Section::Wishlist);
         section_checkbox(ui, Section::Apps);
         ui.separator();

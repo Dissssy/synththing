@@ -33,6 +33,7 @@ self-replace = "1.5"                                      # swapping the running
 sha2 = "0.11"                                             # verifying downloaded updates
 unicode-normalization = "0.1"                             # NFKC for grouping names (fields::group_key)
 regex = "1.13"                                             # guessing tags from file names and video titles (file_tags.rs)
+lrc = "0.2"                                                # reading LRC (timed lyrics) files and tags (lyrics.rs)
 log = { version = "0.4", features = ["kv"] }              # app-wide log (applog.rs); kv marks values usage data may send
 notify = "8"                                              # live-refresh watched folders (watch.rs)
 symphonia-metadata = "0.5.5"                              # ID3v1 genre names, for genres tagged by number (fields::genre_names)

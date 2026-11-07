@@ -54,7 +54,7 @@ pub enum Command {
 
 impl Command {
     /// Every command, in the order the palette and Preferences list them.
-    pub const ALL: [Command; 38] = [
+    pub const ALL: [Command; 39] = [
         Self::TogglePause,
         Self::Play,
         Self::Pause,
@@ -75,6 +75,7 @@ impl Command {
         Self::GoTo(Section::Groupings),
         Self::GoTo(Section::Soundfonts),
         Self::GoTo(Section::Queue),
+        Self::GoTo(Section::Lyrics),
         Self::GoTo(Section::Wishlist),
         Self::GoTo(Section::Apps),
         Self::GoTo(Section::Visualizer),
@@ -121,6 +122,7 @@ impl Command {
                 Section::Groupings => "go_to_groupings",
                 Section::Soundfonts => "go_to_soundfonts",
                 Section::Queue => "go_to_queue",
+                Section::Lyrics => "go_to_lyrics",
                 Section::Wishlist => "go_to_wishlist",
                 Section::Apps => "go_to_apps",
                 Section::Visualizer => "go_to_visualizer",
@@ -174,6 +176,7 @@ impl Command {
                 Section::Groupings => "Go to Groupings",
                 Section::Soundfonts => "Go to Soundfonts",
                 Section::Queue => "Go to Queue",
+                Section::Lyrics => "Go to Lyrics",
                 Section::Wishlist => "Go to Wishlist",
                 Section::Apps => "Go to Apps",
                 Section::Visualizer => "Go to Visualizer",
@@ -231,6 +234,7 @@ const DEFAULTS: &[(Command, &[KeyboardShortcut])] = &[
     (Command::GoTo(Section::Groupings), &[GO, key(Key::G)]),
     (Command::GoTo(Section::Soundfonts), &[GO, key(Key::F)]),
     (Command::GoTo(Section::Queue), &[GO, key(Key::U)]),
+    (Command::GoTo(Section::Lyrics), &[GO, key(Key::Y)]),
     (Command::GoTo(Section::Wishlist), &[GO, key(Key::W)]),
     (Command::GoTo(Section::Visualizer), &[GO, key(Key::V)]),
     (Command::GoTo(Section::Editor), &[GO, key(Key::E)]),
@@ -659,9 +663,9 @@ mod tests {
     fn the_popup_lists_what_follows() {
         let keymap = Keymap::default();
         let next = keymap.next(&[GO]);
-        assert_eq!(next.len(), 10);
+        assert_eq!(next.len(), 11);
         assert!(next.contains(&(key(Key::S), Next::Command(Command::GoTo(Section::Songs)))));
-        assert!(keymap.next(&[]).contains(&(GO, Next::More(10))));
+        assert!(keymap.next(&[]).contains(&(GO, Next::More(11))));
     }
 
     #[test]
@@ -696,7 +700,7 @@ mod tests {
         let synced = Bindings::from([("toggle_pause".into(), vec!["Ctrl+G".into()])]);
         let keymap = Keymap::new(&synced, &Bindings::new());
         let clashes = keymap.clashes(&[GO], Command::TogglePause);
-        assert_eq!(clashes.len(), 10, "every go-to starts with Ctrl+G");
+        assert_eq!(clashes.len(), 11, "every go-to starts with Ctrl+G");
         assert_eq!(keymap.clashes(&[GO, key(Key::S)], Command::GoTo(Section::Songs)), [Command::TogglePause]);
     }
 
