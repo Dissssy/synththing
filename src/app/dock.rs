@@ -158,6 +158,30 @@ impl App {
         self.save_layout();
     }
 
+    /// Line mode's Lyrics, shown in the dock: made exactly as tall as its
+    /// lines, by moving the divider over or under it.
+    fn fit_lyrics(&mut self, dock: &mut DockState<Section>, ctx: &egui::Context) {
+        let Some(error) = self.lyrics.size_error.take().filter(|e| e.abs() > 0.5) else { return };
+        let Some(path) = dock.find_tab(&Section::Lyrics) else { return };
+        let tree = &mut dock[path.surface];
+        if tree[path.node].get_leaf().is_none_or(|leaf| leaf.active != path.tab) {
+            return;
+        }
+        let mut child = path.node;
+        while let Some(parent) = child.parent() {
+            if let egui_dock::Node::Vertical(split) = &mut tree[parent] {
+                let height = split.rect.height();
+                if height > 0.0 {
+                    let change = if child == parent.left() { error } else { -error } / height;
+                    split.fraction = (split.fraction + change).clamp(0.01, 0.99);
+                    ctx.request_repaint();
+                }
+                return;
+            }
+            child = parent;
+        }
+    }
+
     pub(super) fn is_open_in_dock(&self, section: Section) -> bool {
         layout::is_open(&self.dock, section)
     }
@@ -183,6 +207,7 @@ impl App {
         // A locked layout shows no handles, and its panels neither move
         // nor resize: what dragging a divider did is put back after.
         let locked = self.layout_locked();
+        let lyrics_lines = self.config.lyrics_lines.is_some();
         let (mut alone, mut joined) = (Vec::new(), Vec::new());
         for (_, leaf) in dock.iter_leaves_mut() {
             leaf.tab_bar_hidden = leaf.len() == 1;
@@ -210,6 +235,10 @@ impl App {
                 .id(egui::Id::unique("section_dock"))
                 .style({
                     let mut style = crate::theme::dock_style(ui.style());
+                    if lyrics_lines {
+                        // (Room for a single line of lyrics.)
+                        style.separator.extra = 16.0;
+                    }
                     if locked {
                         style.separator.color_hovered = egui::Color32::TRANSPARENT;
                         style.separator.color_dragged = egui::Color32::TRANSPARENT;
@@ -234,6 +263,7 @@ impl App {
                 split.fraction = fraction;
             }
         }
+        self.fit_lyrics(&mut dock, ui.ctx());
         self.dock_in_use = false;
         self.dock = dock;
 
@@ -289,7 +319,11 @@ impl TabViewer for SectionTabs<'_> {
         } else if self.joined.contains(tab) {
             square_corner(ui, self.top);
         }
-        app.section_ui(ui, *tab, self.shared);
+        if *tab == Section::Lyrics {
+            app.lyrics.size_error = app.lyrics_ui(ui, &self.shared.view);
+        } else {
+            app.section_ui(ui, *tab, self.shared);
+        }
     }
 
     /// Sections are shown and hidden from View (and the transport's
@@ -315,7 +349,9 @@ impl App {
             Section::Groupings => app.groupings_ui(ui),
             Section::Soundfonts => app.soundfont_ui(ui),
             Section::Queue => app.queue_ui(ui),
-            Section::Lyrics => app.lyrics_ui(ui, &shared.view),
+            Section::Lyrics => {
+                app.lyrics_ui(ui, &shared.view);
+            }
             Section::Wishlist => app.wishlist_ui(ui),
             Section::Apps => app.apps_ui(ui),
             Section::Visualizer => {

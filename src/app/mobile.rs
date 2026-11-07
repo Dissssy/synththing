@@ -247,7 +247,9 @@ impl App {
             egui::CentralPanel::default().show(ui, |ui| match page {
                 Page::NowPlaying => {}
                 Page::Queue => self.queue_ui(ui),
-                Page::Lyrics => self.lyrics_ui(ui, view),
+                Page::Lyrics => {
+                    self.lyrics_ui(ui, view);
+                }
                 Page::Songs => self.songs_ui(ui),
                 Page::Grouping => self.grouping_ui(ui),
                 Page::Soundfonts => self.soundfont_ui(ui),

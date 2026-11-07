@@ -534,7 +534,9 @@ impl App {
         page_ui.set_clip_rect(page.intersect(ui.clip_rect()));
         match self.mini.page {
             Page::Queue => self.queue_ui(&mut page_ui),
-            Page::Lyrics => self.lyrics_ui(&mut page_ui, &shared.view),
+            Page::Lyrics => {
+                self.lyrics_ui(&mut page_ui, &shared.view);
+            }
             Page::Groupings => self.groupings_ui(&mut page_ui),
             Page::Soundfonts => self.soundfont_ui(&mut page_ui),
             Page::Visualizer => self.mini_visualizer_ui(&mut page_ui, shared),
