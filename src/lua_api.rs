@@ -284,7 +284,7 @@ pub const ITEMS: &[Item] = &[
     f("shared_get", SHARED, "2.0.0", &[p("key", "string")], &[p("value", "any")], "a value shared with Local API programs, nil if none"),
     f("shared_set", SHARED, "2.0.0", &[p("key", "string"), d("value", "any", "nil deletes")], &[], "share a value with Local API programs, until the app closes"),
     f("read_asset", ASSETS, "1.6.0", &[d("name", "string", "a plain file name")], &[p("contents", "string|nil")], "a file's bytes from the script's <name>.lua.assets folder"),
-    f("image_load", ASSETS, "next", &[d("name", "string", "a plain file name, as for read_asset"), od("size", "integer", "at most this many pixels across, scaled smoothly; its own pixels if not given")], &[p("picture", "Picture|nil"), d("error", "string|nil", "why it couldn't be read")], "a PNG or JPEG from the assets folder as a sprite; nil until it's loaded, so call it every frame"),
+    f("image_load", ASSETS, "2.9.0", &[d("name", "string", "a plain file name, as for read_asset"), od("size", "integer", "at most this many pixels across, scaled smoothly; its own pixels if not given")], &[p("picture", "Picture|nil"), d("error", "string|nil", "why it couldn't be read")], "a PNG or JPEG from the assets folder as a sprite; nil until it's loaded, so call it every frame"),
     f("list_assets", ASSETS, "1.6.0", &[], &[p("names", "string[]")], "the files in the script's assets folder, sorted"),
     // What the script defines
     Item {

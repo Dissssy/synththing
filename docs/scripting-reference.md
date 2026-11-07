@@ -1145,7 +1145,7 @@ shared_set("visualizer.peak", peak_left())
 ```lua
 read_asset(name) -> contents                 -- a file's bytes from the script's <name>.lua.assets folder (since 1.6.0)
                                              -- name: a plain file name
-image_load(name, [size]) -> picture, error   -- a PNG or JPEG from the assets folder as a sprite; nil until it's loaded, so call it every frame (since next)
+image_load(name, [size]) -> picture, error   -- a PNG or JPEG from the assets folder as a sprite; nil until it's loaded, so call it every frame (since 2.9.0)
                                              -- name: a plain file name, as for read_asset; size: at most this many pixels across, scaled smoothly; its own pixels if not given
 list_assets() -> names                       -- the files in the script's assets folder, sorted (since 1.6.0)
 ```

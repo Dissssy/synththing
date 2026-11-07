@@ -4,6 +4,8 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+## 2.9.0 (2026-11-07)
+
 ### Added
 - Visualizer scripts can load PNG and JPEG pictures from their assets folder with `image_load(name)`, as sprites: photos for backgrounds, or pixel art and sprite sheets drawn in any image editor. Pictures load in the background, so a big one never holds up a frame.
 - New visualizer, Radial Art: a ring of spectrum bars over the song's album art, or over your own pictures (pick one, or shuffle them song by song), with the time signature or the time in the song in the middle.
