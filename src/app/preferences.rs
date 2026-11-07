@@ -376,6 +376,7 @@ impl App {
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
         let mut native_frame = self.config.native_frame;
+        let mut playing_fps = self.config.playing_fps.unwrap_or(config::DEFAULT_PLAYING_FPS);
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
@@ -753,6 +754,21 @@ impl App {
                              middle to move the window, double-click it to maximize).",
                             |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
                         );
+                        with_info(
+                            ui,
+                            &format!(
+                                "How many times a second the window redraws while a song plays, when \
+                                 nothing else (the mouse, a visualizer) is redrawing it already. Higher \
+                                 makes the seek bar and time move smoothly; lower uses less CPU and \
+                                 battery. Hidden or minimized, it stays at {} a second. {} unless changed.",
+                                config::DEFAULT_PLAYING_FPS,
+                                config::DEFAULT_PLAYING_FPS,
+                            ),
+                            |ui| {
+                                let label = setting_label(ui, "Redraws while playing");
+                                label | setting_slider(ui, egui::Slider::new(&mut playing_fps, config::PLAYING_FPS_RANGE).suffix(" / s").logarithmic(true), 0.0)
+                            },
+                        );
                         if self.has_tray() {
                             with_info(
                                 ui,
@@ -829,6 +845,7 @@ impl App {
             || (self.has_tray() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || native_frame != self.config.native_frame
+            || playing_fps != self.config.playing_fps.unwrap_or(config::DEFAULT_PLAYING_FPS)
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
@@ -868,6 +885,7 @@ impl App {
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.native_frame = native_frame;
+            self.config.playing_fps = Some(playing_fps).filter(|&f| f != config::DEFAULT_PLAYING_FPS);
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);

@@ -16,6 +16,11 @@ use crate::playlist::LoopMode;
 /// The beat pulse's strength and length (`Config::beat_pulse`,
 /// `beat_pulse_length`) unless they're changed.
 pub const DEFAULT_BEAT_PULSE: f32 = 0.3;
+/// How many times a second the window redraws while a song plays, unless
+/// changed (desktop: `Config::playing_fps`).
+pub const DEFAULT_PLAYING_FPS: u32 = 5;
+/// The choices for `Config::playing_fps`.
+pub const PLAYING_FPS_RANGE: std::ops::RangeInclusive<u32> = 5..=144;
 pub const DEFAULT_BEAT_PULSE_LENGTH: f32 = 0.35;
 /// The visualizer pixel scale when `visualizer_scale` isn't set: 4x on
 /// phones, whose screens are dense and hardware slow, 1x elsewhere.
@@ -201,6 +206,11 @@ pub struct Config {
     /// borders) rather than drawing its own (`app/title_bar.rs`).
     #[serde(default)]
     pub native_frame: bool,
+    /// Preference (desktop): how many times a second the window redraws
+    /// while a song plays and nothing else moves, so the seek bar and time
+    /// run smoothly (`None`: `DEFAULT_PLAYING_FPS`).
+    #[serde(default)]
+    pub playing_fps: Option<u32>,
     /// On Android: the visualizer filling the screen draws under a notch
     /// or camera hole too (off: that strip is black).
     #[serde(default)]

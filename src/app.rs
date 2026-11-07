@@ -1129,9 +1129,28 @@ impl App {
         // end of a track is noticed and a playlist's next one starts, with
         // the window in the background, minimized or hidden.
         if !view.paused && (view.has_midi || view.has_audio_file) {
-            ctx.request_repaint_after(Duration::from_millis(200));
-            frame_timing::expect_next_within(Duration::from_millis(200));
+            let every = self.playing_repaint();
+            ctx.request_repaint_after(every);
+            frame_timing::expect_next_within(every);
         }
+    }
+}
+
+impl App {
+    /// How long apart frames come while a song plays: the chosen rate
+    /// (desktop) while the window or the mini player is on screen, else
+    /// often enough to notice the end of a track.
+    fn playing_repaint(&self) -> Duration {
+        let default = Duration::from_secs_f64(1.0 / config::DEFAULT_PLAYING_FPS as f64);
+        #[cfg(windows)]
+        let mini_player = self.tray_panel.is_open();
+        #[cfg(not(windows))]
+        let mini_player = false;
+        if cfg!(target_os = "android") || ((self.hidden || self.minimized) && !mini_player) {
+            return default;
+        }
+        let fps = self.config.playing_fps.unwrap_or(config::DEFAULT_PLAYING_FPS);
+        Duration::from_secs_f64(1.0 / fps as f64)
     }
 }
 
