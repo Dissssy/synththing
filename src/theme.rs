@@ -147,6 +147,11 @@ pub struct Theme {
 
 pub const DEFAULT_THEME: &str = "Dark";
 
+/// The theme used until another is picked (`DEFAULT_THEME`).
+pub fn default_theme() -> Theme {
+    dark()
+}
+
 /// The built-in themes, in the order they're listed.
 pub fn builtins() -> Vec<Theme> {
     vec![dark(), light(), frutiger_aero(), programmer_art()]

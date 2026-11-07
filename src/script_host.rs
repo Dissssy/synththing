@@ -121,6 +121,7 @@ enum Message {
     SetAppLog(bool),
     SetRecording(bool, Option<RecordingTake>),
     SetStreaming(bool),
+    SetTheme(Box<crate::theme::Theme>),
     /// Read the script's variables now and then, as far as the request
     /// opens them (the Debug window shows them), or stop (`None`).
     WatchState(Option<StateRequest>),
@@ -166,6 +167,8 @@ pub struct ScriptHost {
     /// Whether a recording is running, and the take, as last sent.
     recording: (bool, Option<RecordingTake>),
     streaming: bool,
+    /// The app's theme, as last sent.
+    theme: Option<crate::theme::Theme>,
     /// What of the script's variables is being watched, as last sent.
     watching_state: Option<StateRequest>,
 }
@@ -232,6 +235,7 @@ impl ScriptHost {
             app_log: false,
             recording: (false, None),
             streaming: false,
+            theme: None,
             watching_state: None,
         }
     }
@@ -404,6 +408,14 @@ impl ScriptHost {
         if streaming != self.streaming {
             self.streaming = streaming;
             self.send(Message::SetStreaming(streaming));
+        }
+    }
+
+    /// The app's theme, for `theme()` (sent on a change).
+    pub fn set_theme(&mut self, theme: crate::theme::Theme) {
+        if self.theme.as_ref() != Some(&theme) {
+            self.theme = Some(theme.clone());
+            self.send(Message::SetTheme(Box::new(theme)));
         }
     }
 
@@ -644,6 +656,7 @@ fn handle(visualizer: &mut LuaVisualizer, message: Message) -> Option<FrameDone>
         Message::SetAppLog(on) => visualizer.set_app_log(on),
         Message::SetRecording(on, take) => visualizer.set_recording(on, take),
         Message::SetStreaming(on) => visualizer.set_streaming(on),
+        Message::SetTheme(theme) => visualizer.set_theme(*theme),
         Message::WatchState(_) => {} // (handled by the worker)
         Message::SetSetting { key, value } => visualizer.set_setting(&key, value),
         Message::SetActionBindings { index, bindings } => visualizer.set_action_bindings(index, bindings),

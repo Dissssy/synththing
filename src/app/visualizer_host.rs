@@ -49,6 +49,7 @@ impl App {
         let recording = self.recording.recorder.as_ref().is_some_and(|r| !r.paused());
         let take = self.recording.take();
         self.script.set_recording(recording, take);
+        self.script.set_theme(self.current_theme());
         {
             let mut panel = lock_panel(&self.visualizer);
             panel.set_pads(self.pad_frame.clone());

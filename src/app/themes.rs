@@ -52,7 +52,7 @@ impl App {
             .into_iter()
             .chain(self.config.custom_themes.values().cloned())
             .find(|t| t.name == name)
-            .unwrap_or_else(|| theme::builtins().into_iter().find(|t| t.name == theme::DEFAULT_THEME).unwrap())
+            .unwrap_or_else(theme::default_theme)
     }
 
     /// Put the theme into effect again next frame (settings sync changed it).

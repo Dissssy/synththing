@@ -177,6 +177,22 @@ blit(pixels, width, height, palette, [x], [y], [w], [h])   -- a palette-indexed 
 
 `blit` draws a `width` by `height` image in one call, for scripts that render their own picture pixel by pixel (a software 3D renderer, an emulator) where thousands of `pixel` calls would be far too slow. `pixels` is a string of bytes or a list of numbers, one per pixel, row by row from the top-left, each a palette index from 0 to 255; `palette` is a list of up to 256 color tables, where `palette[1]` is the color of index 0 (Lua counting, like sprites), and missing entries are transparent. The image is stretched nearest-neighbor over `x, y, w, h` (the image's own size at the top-left by default), so a 320 x 200 picture can fill the whole visualizer. It's opaque unless the palette's colors say otherwise. `doom.lua` (a bundled game) draws its whole view with one `blit` a frame. Since 1.5.0.
 
+### The app's theme
+
+<!-- api: theme -->
+```lua
+theme() -> theme   -- the app theme's colors, to match the look the user picked (the default theme in previews) (since next)
+```
+<!-- /api -->
+
+```lua
+local t = theme()
+clear(t.background)
+text(4, 4, "Now playing", t.accent)
+```
+
+`theme()` gives the colors of the theme picked in the app (Themes window), so a visualizer can sit in the app like part of it: `background`, `window`, `text`, `weak_text`, `accent`, `playing` and the rest are listed under Tables (`Theme`), plus its `name` and whether it's `dark`. It follows the user changing theme right away. Previews and command-line runs always get the default Dark theme, so they look the same everywhere.
+
 ### Moving and clipping
 
 <!-- api: translate clip push_view pop_view -->
@@ -1223,6 +1239,31 @@ SongNote                -- a whole note of the song (notes_between()), times in 
     velocity: integer
     start: number
     stop: number
+
+Theme                       -- the app theme's colors (theme())
+    name: string
+    dark: boolean           -- a dark theme rather than a light one
+    background: Color       -- behind the tabs and panels
+    window: Color           -- windows, popups and menus
+    faint: Color            -- subtle stripes and highlights
+    deep: Color             -- text fields and the deepest backgrounds
+    text: Color             -- labels and other text
+    widget_text: Color      -- text on buttons and in fields
+    strong_text: Color      -- headings, and text being hovered
+    weak_text: Color        -- secondary text
+    selection: Color        -- selected items
+    accent: Color           -- focus outlines, checkmarks and slider fills
+    link: Color
+    warning: Color
+    error: Color
+    code: Color             -- behind inline code
+    widget: Color           -- buttons and fields
+    widget_hovered: Color   -- a button being hovered
+    widget_pressed: Color   -- a button being pressed
+    widget_outline: Color   -- around a widget being hovered or pressed
+    border: Color           -- separators and borders
+    playing: Color          -- the playing song, in lists
+    star: Color             -- starred songs, in lists
 
 Random                                                          -- a seeded generator (random()): gen:next() a float in [0, 1), gen:next(m) a whole number 1 to m, gen:next(m, n) m to n
     next: fun(self: Random, m?: integer, n?: integer): number   -- the next number, like math.random
