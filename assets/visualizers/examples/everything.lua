@@ -13,6 +13,11 @@
 --   Lyrics    lyrics(): the line being sung (by playback().position) with
 --             the ones around it, its sung words marked; nil without
 --   Up next   up_next(): queue songs (marked Q), then what follows
+--   Image     image_load(): the first PNG or JPEG in the assets folder (the
+--             folder button above opens it), at its own size and at 48 px;
+--             "loading" for a moment, then the picture and its color
+
+script_options({ assets = true })
 
 local DIM = { r = 140, g = 140, b = 150 }
 local BAD = { r = 240, g = 90, b = 80 }
@@ -123,6 +128,25 @@ local function theme_panel(c, th)
     end
 end
 
+local function image_panel(c)
+    c:title("Image")
+    local name
+    for _, file in ipairs(list_assets()) do
+        if file:lower():match("%.png$") or file:lower():match("%.jpe?g$") then name = file break end
+    end
+    local missing = image_load("no such file.png")
+    c:line("missing file: " .. show(missing), missing == nil and GOOD or BAD)
+    if not name then return c:line("put a PNG or JPEG in the assets folder", c.colors.weak) end
+    local full, why = image_load(name)
+    local small = image_load(name, 48)
+    if why then return c:line(why, BAD) end
+    if not (full and small) then return c:line(name .. ": loading...", c.colors.weak) end
+    c:line(string.format("%s: %dx%d, at 48: %dx%d", name, full.width, full.height, small.width, small.height))
+    sprite(small.sprite, c.x, c.y)
+    rect(c.x + small.width + 4, c.y, c.x + small.width + 20, c.y + 16, full.color)
+    c.y = c.y + small.height + 2
+end
+
 local function song_panel(c, bottom)
     c:title("Song details")
     local d = song_details()
@@ -192,6 +216,7 @@ function render(width, height)
     random_panel(pick(1))
     noise_panel(pick(1))
     theme_panel(pick(2), th)
+    image_panel(pick(2))
     local c3 = pick(3)
     song_panel(c3, c3.y + (height - c3.y) * 0.45)
     lyrics_panel(c3)
