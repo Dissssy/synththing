@@ -70,7 +70,6 @@ impl App {
             notes,
             playback,
             transport,
-            false,
             mode,
             fixed_size,
             hold,

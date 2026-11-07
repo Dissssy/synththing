@@ -6,12 +6,14 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Preferences > App > Window > Redraws while playing (desktop): how many times a second the window redraws while a song plays, so the seek bar and time can move smoothly without the mouse over the window. 5 a second unless changed, as before.
+- Windows: the window is drawn with Vulkan again, which no longer flickers other monitors the way DirectX 12 could. Preferences > App > Window > Graphics switches back to DirectX 12 (from the next launch).
 - An offered update shows what it brings: its changelog back to your version, and for a nightly the pull requests merged since the last release, newest first, each linking to its page.
 - Updates is laid out like the rest of the app: a card on top says what the check found (the version, Nightly or Branch build, the size) with its buttons, and under it what the update brings, in the changelog's look, down to a marker for the version you have.
 
 ### Fixed
 - Usage data no longer counts what an older version logged under the version you updated to: counts left unsent at an update are sent under the version they came from, right after the update.
 - The Scripting Reference no longer slows every frame while it's open: only the part in sight is drawn.
+- With Vulkan on NVIDIA graphics, the window no longer stops showing anything after quick resizes, and resizing no longer leaves a gap or stretches for a frame.
 - When a release goes out without this platform's file (an Android build that failed), the updater offers the newest release that has it instead of failing with "release ... has no ...".
 
 ### Changed
@@ -22,6 +24,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The Songs list is made on a background thread: opening Songs, searching and opening or closing a group no longer hold the app up on a big library. A spinner shows until the list is first ready.
 - Groupings' playlists (By Album, By Artist and your own rulesets) are worked out on a background thread too: opening Groupings or Preferences > Rulesets no longer holds the app up, with a spinner until they're first ready.
 - Help > Log and Help > Credits & licenses are one Help page in the panels' place, laid out like Preferences, instead of popups: playback and the visualizer keep going while it's open.
+- The mini player (click the tray icon) is redesigned: a small strip with the song's art and name, the seek bar and buttons of its own (set in Preferences > Appearance > Mini player buttons, left to right, on as many rows as they take), and a drawer that opens the Queue, Groupings, Soundfonts and the visualizer, the same panels as the window, with all they can do. The visualizer's corner button opens the script picker. The drawer always opens below the strip (the window moves up when there's no room below), and can be resized. Show synththing puts the window back where and as big as it was.
 - Clean up and Record are pages in the panels' place too, instead of popups. Clean up's Apply all and Bring back dismissed sit over its suggestions, which fill the page, in a box for each kind (Needs a look first), like Preferences' groups, each folding shut by its heading.
 
 ### Fixed

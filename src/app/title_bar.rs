@@ -92,10 +92,18 @@ impl Fit {
 }
 
 impl App {
+    /// The graphics API to draw the window with, picked in Preferences
+    /// (Windows only; taken at launch).
+    #[cfg(windows)]
+    pub fn graphics_backend(&self) -> crate::config::GraphicsBackend {
+        self.config.graphics_backend
+    }
+
     /// Whether the window has the system's frame: when asked for in
-    /// Preferences, and in the layouts without the title bar.
+    /// Preferences, and in the layouts without the title bar; never as the
+    /// mini player.
     pub fn wants_native_frame(&self) -> bool {
-        self.config.native_frame || self.mobile() || self.dedicated.is_some()
+        (self.config.native_frame || self.mobile() || self.dedicated.is_some()) && !self.mini_open()
     }
 
     /// Give the window the system's frame or take it away, as

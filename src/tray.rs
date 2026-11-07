@@ -1,5 +1,5 @@
-//! The notification-area (tray) icon: synththing's icon. Clicking it shows
-//! and hides the mini player (`app/tray_panel.rs`); right-clicking it brings
+//! The notification-area (tray) icon: synththing's icon. Clicking it turns
+//! the window into the mini player and back (`app/mini_player.rs`); right-clicking it brings
 //! the main window back. Windows only (lib.rs): on other systems there's
 //! no tray, and closing the window quits as it always has.
 //!
