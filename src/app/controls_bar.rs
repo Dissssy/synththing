@@ -173,6 +173,7 @@ impl App {
     /// them.
     pub(super) fn controls_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, width: f32) {
         let gap = ui.spacing().item_spacing.x;
+        let button = icon_button_width(ui.spacing());
         let mut sections = self.config.controls_bar.sections().map(|items| {
             items
                 .into_iter()
@@ -183,10 +184,10 @@ impl App {
         let count = |sections: &[Vec<Slot>; 3], item: BarItem| sections.iter().flatten().filter(|s| **s == Slot::Item(item.clone())).count() as f32;
         let (volumes, speeds) = (count(&sections, BarItem::Volume), count(&sections, BarItem::Speed));
         let fixed = |sections: &[Vec<Slot>; 3]| -> f32 {
-            sections.iter().flatten().filter(|s| !matches!(s, Slot::Item(BarItem::Volume | BarItem::Speed))).map(|s| s.width() + gap).sum::<f32>() + 2.0 * gap
+            sections.iter().flatten().filter(|s| !matches!(s, Slot::Item(BarItem::Volume | BarItem::Speed))).map(|s| s.width(button) + gap).sum::<f32>() + 2.0 * gap
         };
         let need = |fixed: f32, volume: Shape, speed: Shape| {
-            fixed + volumes * (shape_width(volume, volume_width(gap, MIN_SLIDER)) + gap) + speeds * (shape_width(speed, speed_width(gap, MIN_SLIDER)) + gap)
+            fixed + volumes * (shape_width(volume, volume_width(gap, MIN_SLIDER), button) + gap) + speeds * (shape_width(speed, speed_width(gap, MIN_SLIDER, button), button) + gap)
         };
         // Speed's sliders give way first, then volume's.
         let all_fixed = fixed(&sections);
@@ -202,7 +203,7 @@ impl App {
                 .flat_map(|s| (0..sections[s].len()).map(move |i| (s, i)))
                 .filter(|&(s, i)| matches!(sections[s][i], Slot::Item(BarItem::Star | BarItem::Tag(_))))
                 .collect();
-            let fold = (((over / (ICON_BUTTON_WIDTH + gap)).ceil() as usize) + 1).min(toggles.len());
+            let fold = (((over / (button + gap)).ceil() as usize) + 1).min(toggles.len());
             if fold > 1 {
                 let folded = &toggles[toggles.len() - fold..];
                 let items: Vec<BarItem> = folded.iter().filter_map(|&(s, i)| if let Slot::Item(item) = &sections[s][i] { Some(item.clone()) } else { None }).collect();
@@ -226,9 +227,9 @@ impl App {
         let shapes = Shapes { volume, speed };
         let slot_width = |slot: &Slot| match slot {
             Slot::Item(BarItem::Volume) if volume == Shape::Slider => volume_width(gap, slider),
-            Slot::Item(BarItem::Speed) if speed == Shape::Slider => speed_width(gap, slider),
-            Slot::Item(BarItem::Volume | BarItem::Speed) => ICON_BUTTON_WIDTH,
-            slot => slot.width(),
+            Slot::Item(BarItem::Speed) if speed == Shape::Slider => speed_width(gap, slider, button),
+            Slot::Item(BarItem::Volume | BarItem::Speed) => button,
+            slot => slot.width(button),
         };
         let section_width = |slots: &[Slot]| (slots.iter().map(|s| slot_width(s) + gap).sum::<f32>() - gap).max(0.0);
         let [left_w, middle_w, right_w] = [&sections[0], &sections[1], &sections[2]].map(|s| section_width(s));
@@ -274,7 +275,7 @@ impl App {
     /// was worked out.)
     pub(super) fn controls_slots_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, slots: &[Slot], shapes: Shapes) {
         for slot in slots {
-            if ui.available_width() < ICON_BUTTON_WIDTH / 2.0 {
+            if ui.available_width() < icon_button_width(ui.spacing()) / 2.0 {
                 break;
             }
             match slot {
@@ -402,7 +403,7 @@ impl App {
     pub(super) fn bar_toggle_ui(&mut self, ui: &mut egui::Ui, id: &str) {
         let Some(toggle) = self.tag_toggle(id) else { return };
         let song = self.current_song.clone().filter(|p| self.songs.get(p).is_some());
-        let size = egui::vec2(ICON_BUTTON_WIDTH, TRANSPORT_HEIGHT);
+        let size = egui::vec2(icon_button_width(ui.spacing()), TRANSPORT_HEIGHT);
         let clicked = ui
             .add_enabled_ui(song.is_some(), |ui| tags::quick_toggle_button(ui, &self.songs, &toggle, 16.0, size))
             .inner
@@ -494,11 +495,11 @@ pub(super) enum Shape {
 }
 
 /// How wide a `Shape`'s slider form is `slider`; its button form an
-/// icon button.
-pub(super) fn shape_width(shape: Shape, slider: f32) -> f32 {
+/// icon button, `button` wide.
+pub(super) fn shape_width(shape: Shape, slider: f32, button: f32) -> f32 {
     match shape {
         Shape::Slider => slider,
-        Shape::Button => ICON_BUTTON_WIDTH,
+        Shape::Button => button,
     }
 }
 
@@ -511,12 +512,13 @@ pub(super) enum Slot {
 }
 
 impl Slot {
-    /// How wide it is, as a button (sliders aside).
-    fn width(&self) -> f32 {
+    /// How wide it is, as a button (sliders aside), icon buttons `button`
+    /// wide.
+    fn width(&self, button: f32) -> f32 {
         match self {
             Slot::Item(BarItem::Middle | BarItem::Right) => 0.0,
             Slot::Item(BarItem::PlayPause) => PLAY_WIDTH,
-            _ => ICON_BUTTON_WIDTH,
+            _ => button,
         }
     }
 }
@@ -564,13 +566,20 @@ pub(super) fn volume_width(gap: f32, slider: f32) -> f32 {
     VOLUME_TEXT_WIDTH + slider + SPEAKER_WIDTH + 2.0 * gap
 }
 
-/// How wide speed is (`App::speed_ui`), as `volume_width`.
-pub(super) fn speed_width(gap: f32, slider: f32) -> f32 {
-    SPEED_TEXT_WIDTH + slider + ICON_BUTTON_WIDTH + 2.0 * gap
+/// How wide speed is (`App::speed_ui`), as `volume_width`, its button
+/// `button` wide.
+pub(super) fn speed_width(gap: f32, slider: f32, button: f32) -> f32 {
+    SPEED_TEXT_WIDTH + slider + button + 2.0 * gap
 }
 
-/// How wide an `icon_button` is.
-pub(super) const ICON_BUTTON_WIDTH: f32 = 28.0;
+/// How big an `icon_button`'s icon is.
+pub(super) const ICON_SIZE: f32 = 16.0;
+
+/// How wide an `icon_button` is with `spacing`: its icon (each one an em
+/// wide) and the button's padding either side.
+pub(crate) fn icon_button_width(spacing: &egui::Spacing) -> f32 {
+    ICON_SIZE + 2.0 * spacing.button_padding.x
+}
 
 pub(super) const PLAY_WIDTH: f32 = 44.0;
 
@@ -771,6 +780,23 @@ pub(super) const STATUS_HISTORY: usize = 50;
 mod tests {
     use super::*;
     use crate::applog;
+
+    /// The bar's layout works icon buttons out as wide as they draw (when
+    /// it thought them narrower, the middle's last button had no room).
+    #[test]
+    fn icon_buttons_are_as_wide_as_worked_out() {
+        let ctx = egui::Context::default();
+        super::super::fonts::install(&ctx);
+        for _ in 0..2 {
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                for name in ["shuffle", "stop", "skip-back", "skip-forward", "repeat", "repeat-once", "gauge", "dots-three"] {
+                    let drawn = ui.add(icon_button(name)).rect.width();
+                    assert_eq!(drawn, icon_button_width(ui.spacing()), "{name}");
+                }
+            });
+            output.textures_delta.clear(); // (no renderer here to hand them to)
+        }
+    }
 
     /// The status history opens from its button, clears the red dot, and
     /// stays open on the frames after (the dot going away mustn't lose it).
