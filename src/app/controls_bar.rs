@@ -95,6 +95,15 @@ impl App {
             select_list::two_lines(ui, std::iter::empty(), egui::RichText::new(title).strong(), detail, true);
         });
 
+        self.seek_line_ui(ui, view);
+        ui.add_space(2.0);
+
+        self.controls_line_ui(ui, view, width);
+        ui.add_space(6.0);
+    }
+
+    /// The seek bar, between the time it's at and the song's length.
+    pub(super) fn seek_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let accent = self.transport_accent(ui.ctx(), view);
         ui.horizontal(|ui| {
             ui.weak(fmt_time(view.position));
@@ -107,10 +116,32 @@ impl App {
                 }
             });
         });
-        ui.add_space(2.0);
+    }
 
-        self.controls_line_ui(ui, view, width);
-        ui.add_space(6.0);
+    /// The song playing's art, as big a square as fits in `rect`: its own
+    /// (its file's, else its album's), else its artist's picture, else a
+    /// tile in its album's (or its name's) color.
+    pub(super) fn now_playing_art_ui(&mut self, ui: &mut egui::Ui, rect: egui::Rect) {
+        let online = self.config.online_lookup && crate::build_info::online(crate::build_info::Online::Lookup);
+        let title = self.current_title();
+        let art = &mut self.now_playing_art;
+        art.frame(ui.ctx(), online);
+        let square = egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(rect.width().min(rect.height()).max(0.0)));
+        let Some(path) = self.current_song.clone() else { return };
+        let song = self.songs.get(&path);
+        if art.picture(ui, square, &crate::album_art::Source::of_song(Some(path.clone()), song)) {
+            return;
+        }
+        let facts = song.map(crate::fields::Facts::of);
+        let text = |field| facts.as_ref().and_then(|f| f.text(field)).map(|t| t.into_owned());
+        let artist = text(crate::fields::Field::Artist).and_then(|a| a.split(';').next().map(|a| crate::fields::group_key(a.trim(), &self.config.group_ignore)));
+        if let Some(key) = artist.and_then(|a| self.songs.artist_images().get(&a))
+            && art.picture(ui, square, &crate::album_art::Source::image(key))
+        {
+            return;
+        }
+        let name = text(crate::fields::Field::Album).or(title).unwrap_or_default();
+        art.tile(ui, square, &crate::album_art::Source::default(), &name);
     }
 
     /// The bar's detail line: where the song is on its playlist, its
@@ -217,8 +248,14 @@ impl App {
         ui.spacing_mut().slider_width = slider;
         ui.scope_builder(zone(0.0, x - gap), |ui| self.controls_slots_ui(ui, view, &left, shapes));
         ui.scope_builder(zone(x, x + middle_w), |ui| self.controls_slots_ui(ui, view, &middle, shapes));
-        let right_x = (width - right_w).max(x + middle_w + gap);
-        ui.scope_builder(zone(right_x, width), |ui| self.controls_slots_ui(ui, view, &right, shapes));
+        // The right section ends at the right edge, as wide as it was drawn
+        // last frame when that's wider than worked out (buttons run a point
+        // or two past their icons' own widths).
+        let drawn_id = ui.scope_id().with("controls_right_drawn");
+        let drawn = ui.data(|d| d.get_temp::<f32>(drawn_id)).unwrap_or(0.0);
+        let right_x = (width - right_w.max(drawn)).max(x + middle_w + gap);
+        let drawn = ui.scope_builder(zone(right_x, width), |ui| self.controls_slots_ui(ui, view, &right, shapes)).response.rect.width();
+        ui.data_mut(|d| d.insert_temp(drawn_id, drawn));
     }
 
     /// Whether a controls bar item has something to show (a tag still
@@ -489,6 +526,12 @@ impl Slot {
 pub(super) struct Shapes {
     volume: Shape,
     speed: Shape,
+}
+
+impl Shapes {
+    /// Volume and speed as their sliders.
+    #[cfg(windows)]
+    pub(super) const SLIDERS: Self = Self { volume: Shape::Slider, speed: Shape::Slider };
 }
 
 /// A popup right above a controls bar button (as a dropdown, but up),

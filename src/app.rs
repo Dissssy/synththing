@@ -68,7 +68,7 @@ mod toast;
 #[cfg(windows)]
 mod tray;
 #[cfg(windows)]
-mod tray_panel;
+mod mini_player;
 mod tour;
 mod usage;
 mod welcome;
@@ -578,9 +578,9 @@ pub struct App {
     /// Raised when synththing is launched again for this config folder
     /// (`instance.rs`): the window comes back.
     second_launch: Option<Arc<std::sync::atomic::AtomicBool>>,
-    /// The mini player, what clicking the tray icon shows.
+    /// The mini player, what clicking the tray icon turns the window into.
     #[cfg(windows)]
-    tray_panel: tray_panel::TrayPanel,
+    mini: mini_player::MiniPlayer,
     /// The window's hidden in the tray.
     hidden: bool,
     /// The local app API's server and what it last told of.
@@ -600,6 +600,9 @@ pub struct App {
     last_recording: Option<PathBuf>,
     /// The mobile layout's page and what's open in it (`mobile.rs`).
     mobile_state: mobile::Mobile,
+    /// The song playing's art (`now_playing_art_ui`): a phone's Now
+    /// playing, the mini player.
+    now_playing_art: crate::album_art::AlbumArt,
 }
 
 impl App {
@@ -635,12 +638,6 @@ impl App {
         let mut script = ScriptHost::spawn(source.clone(), active_path, sample_rate);
         let visualizer =
             Arc::new(Mutex::new(VisualizerPanel::new(script.take_pipe(), VISUALIZER_WIDTH, VISUALIZER_HEIGHT)));
-        #[cfg(windows)]
-        let picture = tray_panel::Picture {
-            panel: Arc::clone(&visualizer),
-            tap: tap.clone(),
-            playback: Arc::clone(&shared),
-        };
 
         let (playlists, playlist_errors) =
             Library::load(config::playlists_dir().unwrap_or_else(|_| PathBuf::from("playlists")), songs_dir);
@@ -844,7 +841,7 @@ impl App {
             tray: None,
             second_launch: None,
             #[cfg(windows)]
-            tray_panel: tray_panel::TrayPanel::new(picture),
+            mini: mini_player::MiniPlayer::default(),
             hidden: false,
             api: api::ApiState::default(),
             quitting: false,
@@ -854,6 +851,7 @@ impl App {
             tray_picture: None,
             last_recording: None,
             mobile_state: mobile::Mobile::default(),
+            now_playing_art: crate::album_art::AlbumArt::default(),
         };
         #[cfg(windows)]
         if offer_install {
@@ -1002,8 +1000,10 @@ impl App {
     }
 
     /// Bring the main window back and to the front: un-hidden,
-    /// un-minimized, focused (which puts the mini player away, `logic`).
+    /// un-minimized, focused, and no longer the mini player.
     fn show_window(&mut self, ctx: &egui::Context) {
+        #[cfg(windows)]
+        self.leave_mini(ctx);
         self.hidden = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
         ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
@@ -1061,17 +1061,10 @@ impl App {
         self.minimized = ctx.input(|i| i.viewport().minimized.unwrap_or(false));
         let view = self.shared.lock().unwrap().view.clone();
         #[cfg(windows)]
-        frame_timing::time("handle_tray", || self.handle_tray(ctx, &view));
+        frame_timing::time("handle_tray", || self.handle_tray(ctx));
         if self.second_launch.as_ref().is_some_and(|f| f.swap(false, std::sync::atomic::Ordering::Relaxed)) {
             log::info!("launched again: showing the window");
             self.show_window(ctx);
-        }
-        // The main window and the mini player are never up together: the
-        // main window on screen, however it got there (`show_window`, or
-        // restored from the taskbar), puts the mini player away.
-        #[cfg(windows)]
-        if !self.hidden && !self.minimized && self.tray_panel.is_open() {
-            self.tray_panel.hide(ctx);
         }
         frame_timing::time("sync_script_song", || self.sync_script_song(&view));
         frame_timing::time("poll_loads", || self.poll_loads());
@@ -1150,15 +1143,7 @@ impl eframe::App for App {
         crate::usage::set_view(self.mobile(), scale, window);
         frame_timing::time("sync_theme", || self.sync_theme(&ctx));
         if self.hidden {
-            // Hidden in the tray, this still runs while a tray window (a
-            // child of this one) is up: draw nothing, least of all the
-            // visualizer, which would run the script at this window's
-            // size between the mini player's frames. Only keep the tray
-            // window there.
-            #[cfg(windows)]
-            if self.tray.is_some() {
-                self.tray_panel.register(&ctx);
-            }
+            // (eframe still asks for a frame now and then: draw nothing.)
             frame_timing::end();
             return;
         }
@@ -1216,6 +1201,9 @@ impl eframe::App for App {
         self.collect_flow_steps();
         if self.dedicated.is_some() {
             frame_timing::time("dedicated", || self.dedicated_ui(ui, &shared));
+        } else if self.mini_open() {
+            #[cfg(windows)]
+            frame_timing::time("mini player", || self.mini_player_ui(ui, &shared));
         } else if self.mobile() {
             // (The whole screen: the flow comes first.)
             if self.flow.open() {
@@ -1281,10 +1269,6 @@ impl eframe::App for App {
         self.rules_editor_ui(&ctx);
         self.close_requested_ui(&ctx);
         self.close_prompt_ui(&ctx);
-        #[cfg(windows)]
-        if self.tray.is_some() {
-            self.tray_panel.register(&ctx);
-        }
         // Outside the layout: F9 can ask for ffmpeg from the dedicated
         // fullscreen too.
         self.ffmpeg_prompt_ui(&ctx);
@@ -1346,6 +1330,13 @@ impl eframe::App for App {
         });
         frame_timing::time("tick", || self.tick(ctx));
         frame_timing::logic_done();
+    }
+
+    /// Each frame's input before egui sees it: the mini player corrects
+    /// where the pointer is after it moved the window under it.
+    #[cfg(windows)]
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.mini_raw_input(ctx, raw_input);
     }
 
     /// Last chance to save a layout change the once-a-second autosave

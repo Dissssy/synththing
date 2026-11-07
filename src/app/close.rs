@@ -87,10 +87,19 @@ impl App {
         false
     }
 
-    /// Hide the window; the tray icon brings it back.
+    /// Hide the window (the mini player stays the mini player, hidden);
+    /// the tray icon brings it back.
     pub(super) fn hide_window(&mut self, ctx: &egui::Context) {
         self.hidden = true;
         ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+    }
+
+    /// The window is the mini player.
+    pub(super) fn mini_open(&self) -> bool {
+        #[cfg(windows)]
+        return self.mini.is_open();
+        #[cfg(not(windows))]
+        false
     }
 
     /// A recording or a background render is going.
@@ -194,7 +203,7 @@ fn first_time_ui(ui: &mut egui::Ui, picture: Option<&egui::TextureHandle>, answe
         ui.add_space(8.0);
         let size = picture.size_vec2() * (220.0 / picture.size_vec2().y);
         ui.add(egui::Image::new((picture.id(), size)).corner_radius(6.0));
-        ui.weak("The mini player, with the visualizer beside it");
+        ui.weak("The mini player, its drawer open");
     }
     ui.add_space(8.0);
     ui.horizontal(|ui| {
@@ -218,8 +227,8 @@ fn first_time_text(ui: &mut egui::Ui) {
     );
     ui.add_space(4.0);
     ui.label(format!(
-        "{}  Click its icon for the mini player: playback, playlists and soundfonts in a little window that \
-         stays on top, and the visualizer beside them if you like.",
+        "{}  Click its icon for the mini player: a little player that stays on top, with the queue, groupings, \
+         soundfonts and the visualizer in its drawer.",
         super::icon("cursor-click")
     ));
     ui.label(format!("{}  Right-click it to bring the window back.", super::icon("app-window")));

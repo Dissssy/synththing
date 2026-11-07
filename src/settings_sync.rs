@@ -112,6 +112,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
             setting("channel_chips", "Channel chips", &["channel_chips"]),
             setting("controls_bar", "Controls bar layout", &["controls_bar"]),
+            setting("mini_controls", "Mini player buttons", &["mini_controls"]),
             setting("even_volume", "Even out volume", &["even_volume", "volume_target", "album_volume"]),
             Setting { key: "volume", name: "Last volume (taken at the next launch)", paths: &["session/volume"], on: false },
             Setting { key: "speed", name: "Last speed (taken at the next launch)", paths: &["session/speed"], on: false },

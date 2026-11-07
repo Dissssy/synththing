@@ -209,7 +209,6 @@ pub fn main() -> Result<()> {
         width: 256,
         height: 256,
     };
-    #[cfg_attr(not(windows), expect(unused_mut))]
     let mut options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title(build_info::window_title())
@@ -230,6 +229,20 @@ pub fn main() -> Result<()> {
             crate::config::GraphicsBackend::Dx12 => eframe::wgpu::Backends::DX12,
             crate::config::GraphicsBackend::Vulkan => eframe::wgpu::Backends::VULKAN,
         };
+    }
+    options.wgpu_options.on_surface_status = std::sync::Arc::new(surface_status);
+    // Two frames in flight, not one: with one, NVIDIA's Vulkan driver
+    // could stop showing the window's frames for good after quick resizes
+    // (the mini player's drawer), each frame waiting half a second for its
+    // surface (#332).
+    options.wgpu_options.surface.desired_maximum_frame_latency = Some(2);
+    // Mailbox on Windows: a resized window's next frame shows at once
+    // instead of the old one stretched or a gap for a frame. (The app
+    // paces its own repaints, the visualizer at 60 a second, so it doesn't
+    // draw flat out. DX12 and Windows' Vulkan drivers all have it.)
+    #[cfg(windows)]
+    {
+        options.wgpu_options.surface.present_mode = eframe::wgpu::PresentMode::Mailbox;
     }
     eframe::run_native(
         "synththing",
@@ -256,6 +269,29 @@ pub fn main() -> Result<()> {
     )
         .map_err(|e| anyhow!("failed to run the GUI: {e}"))?;
     Ok(())
+}
+
+/// What to do when the window's surface gives no frame to draw into
+/// (egui_wgpu's own choices), noting in the log each time that changes to
+/// another reason: a window whose picture stops while the app goes on
+/// (clicks still work) shows here why.
+fn surface_status(status: &eframe::wgpu::CurrentSurfaceTexture) -> eframe::egui_wgpu::SurfaceErrorAction {
+    use eframe::egui_wgpu::SurfaceErrorAction;
+    use eframe::wgpu::CurrentSurfaceTexture;
+    static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    let action = match status {
+        CurrentSurfaceTexture::Outdated => SurfaceErrorAction::Reconfigure,
+        CurrentSurfaceTexture::Lost => SurfaceErrorAction::RecreateSurface,
+        _ => SurfaceErrorAction::SkipFrame,
+    };
+    let name = format!("{status:?}");
+    if let Ok(mut last) = LAST.lock()
+        && *last != name
+    {
+        log::warn!("no frame to draw into: {name}");
+        *last = name;
+    }
+    action
 }
 
 /// The main window's HWND, which the system's media controls need on
