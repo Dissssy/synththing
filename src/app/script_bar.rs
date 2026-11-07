@@ -489,18 +489,21 @@ pub(super) fn settings_row_ui(ui: &mut egui::Ui, d: &SettingDescriptor, changed:
 /// channel's on (the check mark black or white, whichever reads better on
 /// it), outlined in it while it's off.
 pub(super) fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Color32) -> egui::Response {
-    ui.scope(|ui| {
-        let mark = on_color(color);
-        let visuals = ui.visuals_mut();
-        // (The label keeps its usual color: the check mark's is the widget's.)
-        visuals.override_text_color = Some(visuals.widgets.inactive.text_color());
-        let fill = if *on { color } else { color.gamma_multiply(0.15) };
-        for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
-            state.bg_fill = fill;
-            state.bg_stroke = egui::Stroke::new(state.bg_stroke.width.max(1.0), color);
-            state.fg_stroke.color = mark;
-        }
-        ui.checkbox(on, label)
-    })
-    .inner
+    // Restyled in place rather than in a child `ui.scope`: a child Ui starts
+    // at the cursor, so its widget can't wrap, and in a `horizontal_wrapped`
+    // row the toggles would run past the edge (and widen everything below).
+    let style = ui.style().clone();
+    let mark = on_color(color);
+    let visuals = ui.visuals_mut();
+    // (The label keeps its usual color: the check mark's is the widget's.)
+    visuals.override_text_color = Some(visuals.widgets.inactive.text_color());
+    let fill = if *on { color } else { color.gamma_multiply(0.15) };
+    for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+        state.bg_fill = fill;
+        state.bg_stroke = egui::Stroke::new(state.bg_stroke.width.max(1.0), color);
+        state.fg_stroke.color = mark;
+    }
+    let response = ui.checkbox(on, label);
+    ui.set_style(style);
+    response
 }
