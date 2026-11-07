@@ -1,10 +1,14 @@
 //! Maths helpers for scripts that nearly every visual one ends up writing
-//! itself: smooth noise (`noise`) and easing curves (`ease`).
+//! itself: smooth noise (`noise`), easing curves (`ease`) and seeded
+//! random generators (`random`), plus seeding `math.random` the same way
+//! every time in a recording.
 
 use std::f64::consts::PI;
 
-use mlua::Lua;
+use mlua::{IntoLua, Lua, UserData, UserDataMethods};
 use noise::{NoiseFn, Simplex};
+use rand::{Rng, SeedableRng};
+use rand_xorshift::XorShiftRng;
 
 /// The easing curves `ease` knows, by name: `in_` speeds up from rest,
 /// `out_` slows into rest, `in_out_` does both.
@@ -69,6 +73,37 @@ pub fn ease(name: &str, t: f64) -> Result<f64, String> {
     })
 }
 
+/// A generator from `random(seed)`: the same seed always gives the same
+/// numbers, and it leaves `math.random` alone.
+struct Generator(XorShiftRng);
+
+impl UserData for Generator {
+    fn add_methods<M: UserDataMethods<Self>>(methods: &mut M) {
+        // Like math.random: a float in [0, 1), or a whole number in
+        // [1, m] or [m, n].
+        methods.add_method_mut("next", |lua, this, (m, n): (Option<i64>, Option<i64>)| {
+            let (lo, hi) = match (m, n) {
+                (None, _) => return this.0.r#gen::<f64>().into_lua(lua),
+                (Some(m), None) => (1, m),
+                (Some(m), Some(n)) => (m, n),
+            };
+            if lo > hi {
+                return Err(mlua::Error::runtime(format!("next: interval is empty ({lo} to {hi})")));
+            }
+            this.0.gen_range(lo..=hi).into_lua(lua)
+        });
+    }
+}
+
+/// Seeds `math.random` from the song (its id, or 0 for none), so a
+/// recording of the same song draws the same "random" picture every time.
+pub fn seed_for_recording(lua: &Lua, song_id: Option<&str>) -> mlua::Result<()> {
+    let seed = song_id.and_then(|id| u64::from_str_radix(id, 16).ok()).unwrap_or(0);
+    let math: mlua::Table = lua.globals().get("math")?;
+    let randomseed: mlua::Function = math.get("randomseed")?;
+    randomseed.call::<()>(seed as i64)
+}
+
 pub fn register(lua: &Lua) -> mlua::Result<()> {
     let globals = lua.globals();
 
@@ -87,6 +122,7 @@ pub fn register(lua: &Lua) -> mlua::Result<()> {
     )?;
 
     globals.set("ease", lua.create_function(|_, (name, t): (String, f64)| ease(&name, t).map_err(mlua::Error::runtime))?)?;
+    globals.set("random", lua.create_function(|_, seed: i64| Ok(Generator(XorShiftRng::seed_from_u64(seed as u64))))?)?;
     Ok(())
 }
 
@@ -109,6 +145,35 @@ mod tests {
         assert_eq!(ease("linear", 2.0), Ok(1.0));
         assert!(ease("in_wobble", 0.5).is_err());
         assert!(ease("cubic", 0.5).is_err());
+    }
+
+    #[test]
+    fn generators_repeat_and_recordings_seed_math_random() {
+        let lua = Lua::new();
+        register(&lua).unwrap();
+        let (same, ranged, empty): (bool, bool, bool) = lua
+            .load(
+                r#"
+                local a, b = random(7), random(7)
+                local same = true
+                for _ = 1, 20 do same = same and a:next() == b:next() end
+                local ranged = true
+                for _ = 1, 200 do
+                    local v = a:next(3, 5)
+                    ranged = ranged and v >= 3 and v <= 5 and math.type(v) == "integer"
+                end
+                return same, ranged, pcall(a.next, a, 5, 3)
+                "#,
+            )
+            .eval()
+            .unwrap();
+        assert!(same && ranged && !empty);
+
+        let draw = |lua: &Lua| -> f64 {
+            seed_for_recording(lua, Some("00ff00ff00ff00ff")).unwrap();
+            lua.load("return math.random()").eval().unwrap()
+        };
+        assert_eq!(draw(&lua), draw(&Lua::new()));
     }
 
     #[test]

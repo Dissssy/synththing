@@ -73,7 +73,9 @@
 //!   it started, wall clock, uncapped).
 //! * `now()`, `unix_time()`, `format_time()`: the date and time of day,
 //!   recording time in a recording (`script_clock.rs`).
-//! * `noise()` and `ease()`: smooth noise and easing curves (`script_math.rs`).
+//! * `noise()`, `ease()` and `random(seed)`: smooth noise, easing curves and
+//!   seeded generators; `math.random` is seeded from the song in a
+//!   recording, so it renders the same every time (`script_math.rs`).
 //! * Cursor: `set_cursor_visible(visible)` (applies over the visualizer) and
 //!   `set_cursor_locked(locked)` (keeps it on screen, dedicated fullscreen
 //!   only).
@@ -1849,6 +1851,9 @@ struct Compiled {
     time: Cell<f64>,
     /// What `now()` and friends read: wall time, or recording time.
     clock: Rc<RefCell<ScriptClock>>,
+    /// Part of a recording as of the last frame: `math.random` is seeded
+    /// from the song when one starts (`script_math::seed_for_recording`).
+    in_recording: Cell<bool>,
     /// What each frame starts from (`set_clear_color`).
     canvas: Canvas,
     /// `translate` / `clip` this frame, and what `push_view` saved.
@@ -2367,7 +2372,15 @@ impl Visualizer for LuaVisualizer {
         compiled.time.set(time);
         let _ = compiled.lua.globals().set("FRAME", compiled.frame.get());
         let _ = compiled.lua.globals().set("TIME", time);
-        compiled.clock.borrow_mut().frame(time, self.song.borrow().recording);
+        {
+            let song = self.song.borrow();
+            compiled.clock.borrow_mut().frame(time, song.recording);
+            let in_recording = song.recording || song.take.is_some();
+            if in_recording && !compiled.in_recording.get() {
+                let _ = crate::script_math::seed_for_recording(&compiled.lua, song.id.as_deref());
+            }
+            compiled.in_recording.set(in_recording);
+        }
 
         let left: Vec<f32> = samples.iter().map(|&(l, _)| l).collect();
         let right: Vec<f32> = samples.iter().map(|&(_, r)| r).collect();
@@ -2622,6 +2635,16 @@ fn compile(
         })
         .collect();
 
+    // A recording (or preview) starts every run of the script the same way.
+    let in_recording = {
+        let song = song.borrow();
+        let in_recording = song.recording || song.take.is_some();
+        if in_recording {
+            crate::script_math::seed_for_recording(&lua, song.id.as_deref()).map_err(|e| e.to_string())?;
+        }
+        in_recording
+    };
+
     deadline.set(Some(Instant::now() + watchdog_limit));
     let ran = lua.load(source).set_name("visualizer").exec();
     deadline.set(None);
@@ -2654,6 +2677,7 @@ fn compile(
         frame: Cell::new(0),
         time: Cell::new(0.0),
         clock,
+        in_recording: Cell::new(in_recording),
         canvas,
         view,
         host_globals,

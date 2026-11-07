@@ -151,6 +151,7 @@ pub const ITEMS: &[Item] = &[
     f("mix", DRAWING, "0.6.0", &[p("color1", COLOR), p("color2", COLOR), d("t", "number", "0 is color1, 1 is color2")], &[p("color", COLOR)], "a color between two, alpha included"),
     f("noise", MATHS, "next", &[p("x", "number"), opt("y", "number"), opt("z", "number")], &[d("value", "number", "-1 to 1")], "smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value"),
     f("ease", MATHS, "next", &[d("curve", "string", "\"linear\", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce"), d("t", "number", "0 to 1, clamped")], &[p("value", "number")], "t along an easing curve (back and elastic overshoot past 0 and 1)"),
+    f("random", MATHS, "next", &[d("seed", "integer", "the same seed always gives the same numbers")], &[p("generator", "Random")], "a random number generator of its own, apart from math.random"),
     f("approach", PLAYBACK, "0.6.0", &[p("current", "number"), p("target", "number"), d("rate", "number", "per second"), od("rate_down", "number", "per second, going down")], &[p("value", "number")], "smoothing by the second, the same at any frame rate"),
     // Text
     f("text", TEXT, "0.1.5", &[p("x", "number"), p("y", "number"), p("text", "string"), p("color", COLOR), od("height", "number", "line height in pixels, FONT_HEIGHT if not given")], SIZE, "draw pixel text (Monogram; Japanese, Korean and Chinese from Noto), and get the size drawn"),
@@ -361,6 +362,11 @@ pub const CLASSES: &[Class] = &[
         name: "SongNote",
         summary: "a whole note of the song (notes_between()), times in song seconds",
         fields: &[p("id", "integer"), p("channel", "integer"), p("key", "integer"), p("velocity", "integer"), p("start", "number"), p("stop", "number")],
+    },
+    Class {
+        name: "Random",
+        summary: "a seeded generator (random()): gen:next() a float in [0, 1), gen:next(m) a whole number 1 to m, gen:next(m, n) m to n",
+        fields: &[d("next", "fun(self: Random, m?: integer, n?: integer): number", "the next number, like math.random")],
     },
     Class {
         name: "Date",
@@ -847,11 +853,16 @@ mod tests {
     fn versions_and_types_are_sound() {
         let classes: HashSet<&str> = CLASSES.iter().map(|c| c.name).collect();
         let builtin = ["number", "integer", "string", "boolean", "any", "nil", "table"];
-        let known = |ty: &str| {
+        let named = |ty: &str| {
             // `table<K, V>`, `(A|B)[]`, `"literal"`: check the named parts.
             ty.split(|c: char| "|[]()<>, ".contains(c))
                 .filter(|part| !part.is_empty() && !part.starts_with('"') && part != &"table")
                 .all(|part| builtin.contains(&part) || classes.contains(part))
+        };
+        // A method, `fun(self: C, x?: T): R`: the types after each colon.
+        let known = |ty: &str| match ty.strip_prefix("fun(") {
+            Some(rest) => rest.split(':').skip(1).all(|after| named(after.split([',', ')']).next().unwrap_or(""))),
+            None => named(ty),
         };
         for (name, since) in all_since() {
             assert!(since == "next" || semver::Version::parse(since).is_ok(), "{name}: {since}");

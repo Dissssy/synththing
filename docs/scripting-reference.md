@@ -547,11 +547,13 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 
 ## Noise & easing
 
-<!-- api: noise ease -->
+<!-- api: noise ease random -->
 ```lua
 noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since next)
 ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since next)
                               -- curve: "linear", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce; t: 0 to 1, clamped
+random(seed) -> generator     -- a random number generator of its own, apart from math.random (since next)
+                              -- seed: the same seed always gives the same numbers
 ```
 <!-- /api -->
 
@@ -568,6 +570,10 @@ circle(ease("out_back", t) * (width - 40) + 20, 20, 8, {r=255, g=180, b=60})
 ```
 
 `noise` is simplex noise: nearby inputs give nearby values, so stepping one input slowly (time, or a position times a small scale) gives smooth drift. It's the same field for every script and every run, recordings included; offset the inputs (`noise(x + 100, y)`) for a different-looking one. Adding a few layers at doubling scales and halving strengths (`noise(x) + noise(x * 2) / 2 + noise(x * 4) / 4`) gives rougher, more natural shapes.
+
+`random(seed)` makes a generator of its own: `gen:next()` works like `math.random()` (a float from 0 up to 1, `gen:next(6)` a whole number 1 to 6, `gen:next(10, 20)` one from 10 to 20), and the same seed always gives the same numbers, so a starfield or a layout made from it comes out the same on every run without touching `math.random`.
+
+In a recording (and so in previews) `math.random` itself is seeded from the song too, so re-recording the same song gives the same video, random-looking parts included. Outside a recording it's truly random.
 
 `ease` bends a 0-to-1 progress into a curve: `in_` curves start slow, `out_` ones end slow, `in_out_` both. `back` overshoots a little and comes back, `elastic` springs and `bounce` lands like a ball, so those go past 0 or 1 on the way.
 
@@ -1217,6 +1223,9 @@ SongNote                -- a whole note of the song (notes_between()), times in 
     velocity: integer
     start: number
     stop: number
+
+Random                                                          -- a seeded generator (random()): gen:next() a float in [0, 1), gen:next(m) a whole number 1 to m, gen:next(m, n) m to n
+    next: fun(self: Random, m?: integer, n?: integer): number   -- the next number, like math.random
 
 Date                      -- a date and time of day (now())
     year: integer

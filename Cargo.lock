@@ -6157,6 +6157,8 @@ dependencies = [
  "puffin",
  "puffin_egui",
  "qrcode",
+ "rand 0.8.8",
+ "rand_xorshift",
  "raw-window-handle",
  "regex",
  "resvg",
