@@ -57,7 +57,7 @@ impl Lyrics {
             let lines = lrc
                 .get_timed_lines()
                 .iter()
-                .map(|(at, text)| Line { at: Some(at.get_timestamp().max(0) as f64 / 1000.0), text: text.trim().to_string() })
+                .map(|(at, text)| Line { at: Some(at.get_timestamp().max(0) as f64 / 1000.0), text: without_word_times(text) })
                 .collect();
             return Some(Lyrics { source, lines, timed: true });
         }
@@ -86,6 +86,13 @@ impl Lyrics {
         let end = self.lines.get(index + 1).and_then(|l| l.at).unwrap_or(length.max(start));
         if end <= start { 1.0 } else { ((position - start) / (end - start)).clamp(0.0, 1.0) as f32 }
     }
+}
+
+/// A line of enhanced LRC without its words' times (`<01:02.50>`), which
+/// aren't followed yet.
+fn without_word_times(text: &str) -> String {
+    static WORD_TIME: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| regex::Regex::new(r"<\d+:\d+(?:[.:]\d+)?>").expect("a valid regex"));
+    WORD_TIME.replace_all(text, "").split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The song at `path`'s lyrics, if it has any (on the lyrics thread).
@@ -159,6 +166,12 @@ mod tests {
         assert_eq!(lyrics.current(100.0), Some(2));
         assert_eq!(lyrics.progress(0, 1.75, 20.0), 0.5);
         assert_eq!(lyrics.progress(2, 20.0, 20.0), 1.0);
+    }
+
+    #[test]
+    fn word_times_are_dropped() {
+        let lyrics = Lyrics::parse("[00:12.00]<00:12.00>Your <00:12.40>faith <00:12.90>was<00:13.20>\n", Source::File).unwrap();
+        assert_eq!(lyrics.lines[0].text, "Your faith was");
     }
 
     #[test]

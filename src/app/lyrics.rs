@@ -63,7 +63,7 @@ impl App {
         let lyrics = self.playing_lyrics(ui.ctx());
         let lines = self.config.lyrics_lines.map(|n| n.clamp(1, MAX_LINES));
         let line_height = line_height(ui);
-        let size_error = lines.map(|n| f32::from(n) * line_height + if n == 1 { BAR + 2.0 } else { 0.0 } - ui.available_height());
+        let size_error = lines.map(|n| f32::from(n) * line_height + BAR_ROOM - ui.available_height());
         let rect = ui.available_rect_before_wrap();
         // (Line mode, and back, from the panel's right-click menu.)
         ui.interact(rect, ui.scope_id().with("lyrics_menu"), egui::Sense::click()).context_menu(|ui| self.lyrics_menu_ui(ui));
@@ -115,6 +115,10 @@ impl App {
                     if scroll_to == Some(i) {
                         response.scroll_to_me(Some(egui::Align::Center));
                     }
+                    if current == Some(i) {
+                        let (room, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), BAR_ROOM), egui::Sense::hover());
+                        progress_bar(ui, room.center_top() + egui::vec2(0.0, 1.0), lyrics.progress(i, position, view.length - offset));
+                    }
                 }
                 ui.add_space(ui.clip_rect().height() / 2.0);
                 ui.weak(lyrics.source.label());
@@ -147,8 +151,19 @@ impl App {
 /// The most lines line mode shows.
 pub const MAX_LINES: u8 = 5;
 
-/// The height of line 1's progress bar.
+/// The height of the progress bar under the line being sung, and the room
+/// it takes.
 const BAR: f32 = 3.0;
+const BAR_ROOM: f32 = BAR + 2.0;
+
+/// How far through the line being sung the song is (`done`, 0 to 1): a bar
+/// centered under `top`.
+fn progress_bar(ui: &egui::Ui, top: egui::Pos2, done: f32) {
+    let width = (ui.max_rect().width() * 0.6).min(400.0);
+    let track = egui::Rect::from_min_size(egui::pos2(top.x - width / 2.0, top.y), egui::vec2(width, BAR));
+    ui.painter().rect_filled(track, 1.5, ui.visuals().faint_bg_color);
+    ui.painter().rect_filled(egui::Rect::from_min_size(track.min, egui::vec2(width * done, BAR)), 1.5, crate::theme::playing_color(ui.ctx()));
+}
 
 fn text_size(ui: &egui::Ui) -> f32 {
     ui.style().text_styles[&egui::TextStyle::Body].size * 1.25
@@ -159,14 +174,14 @@ fn line_height(ui: &egui::Ui) -> f32 {
     ui.fonts_mut(|f| f.row_height(&egui::FontId::proportional(text_size(ui)))) + 4.0
 }
 
-/// Line mode: `n` lines, the one being sung in the middle (over a bar of
-/// how far through it the song is, for one line), centered in `rect`.
+/// Line mode: `n` lines, the one being sung in the middle over a bar of
+/// how far through it the song is, centered in `rect`.
 #[allow(clippy::too_many_arguments)]
 fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_height: f32, current: Option<usize>, position: f64, length: f64) {
     let n = usize::from(n);
     let playing = crate::theme::playing_color(ui.ctx());
     let font = egui::FontId::proportional(text_size(ui));
-    let block = n as f32 * line_height + if n == 1 { BAR + 2.0 } else { 0.0 };
+    let block = n as f32 * line_height + BAR_ROOM;
     let top = rect.center().y - block / 2.0;
     // (Before the first line, it's next, under where the sung one goes.)
     let middle = (n - 1) / 2;
@@ -185,17 +200,13 @@ fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_he
         let mut job = egui::text::LayoutJob::simple_singleline(text.to_string(), font.clone(), color);
         job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 16.0);
         let galley = painter.layout_job(job);
-        let center = egui::pos2(rect.center().x, top + (row as f32 + 0.5) * line_height);
+        // (The bar sits under the middle row, pushing the rows after down.)
+        let below = if row > middle { BAR_ROOM } else { 0.0 };
+        let center = egui::pos2(rect.center().x, top + (row as f32 + 0.5) * line_height + below);
         painter.galley(center - galley.size() / 2.0, galley, color);
     }
-    if n == 1
-        && let Some(i) = current
-    {
-        let done = lyrics.progress(i, position, length);
-        let width = (rect.width() * 0.6).min(400.0);
-        let track = egui::Rect::from_min_size(egui::pos2(rect.center().x - width / 2.0, top + line_height + 1.0), egui::vec2(width, BAR));
-        painter.rect_filled(track, 1.5, ui.visuals().faint_bg_color);
-        painter.rect_filled(egui::Rect::from_min_size(track.min, egui::vec2(width * done, BAR)), 1.5, playing);
+    if let Some(i) = current {
+        progress_bar(ui, egui::pos2(rect.center().x, top + (middle + 1) as f32 * line_height + 1.0), lyrics.progress(i, position, length));
     }
     ui.allocate_rect(rect, egui::Sense::hover());
 }
