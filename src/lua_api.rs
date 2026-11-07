@@ -942,6 +942,42 @@ mod tests {
         assert_eq!(ours.len(), ITEMS.len(), "a name is in ITEMS twice");
     }
 
+    /// The Everything example (assets/visualizers/examples/everything.lua)
+    /// calls the whole API: every name in ITEMS shows up in it, but for
+    /// these, which it doesn't cover yet. The list only shrinks: a new API
+    /// call gets a line in everything.lua, not a place here.
+    #[test]
+    fn everything_example_calls_the_api() {
+        const NOT_YET: &[&str] = &[
+        "circle_outline", "triangle", "polygon", "pixel", "set_clear_color", "shift_frame", "translate", "clip", "push_view", "pop_view", "hsv",
+        "mix", "approach", "sprite_register", "sprite", "sprite_size", "blit", "album_art", "fft_left", "fft_right", "fft_bin", "fft_freq",
+        "fft_band", "level_left", "level_right", "peak_left", "peak_right", "onset", "history_left", "history_right", "note_name", "note_freq",
+        "freq_note", "SAMPLE_RATE", "active_notes", "upcoming_notes", "notes_between", "midi_channels", "channel_enabled", "set_channel_enabled",
+        "channel_program", "channel_name", "channel_colors", "NOTE_LOOKAHEAD", "playback", "set_paused", "seek", "set_speed", "script_options",
+        "display_mode", "is_mobile", "DT", "FRAME", "recording_ready", "recording_done", "playlist", "play_track", "next_track", "previous_track",
+        "set_loop", "set_shuffle", "beat", "time_at_beat", "bar", "tempo", "time_signature", "has_focus", "mouse", "mouse_delta", "scroll",
+        "mouse_down", "mouse_pressed", "mouse_released", "touches", "set_cursor_visible", "set_cursor_locked", "input_register", "input",
+        "input_down", "input_value", "pad_axis", "gamepads", "key_down", "key_pressed", "key_released", "text_typed", "typing_begin", "typing_state",
+        "typing_end", "play_note", "note_on", "note_off", "stop_notes", "notes_playable", "midi_send", "sound_register", "sound_play",
+        "sequence_register", "sequence_play", "sequence_stop", "log", "log_app", "debug_locals", "setting_bool", "setting_int", "setting_float",
+        "setting_color", "setting_string", "setting_selection", "settings_preset", "store_get", "store_set", "shared_get", "shared_set",
+        "read_asset", "list_assets",
+        ];
+        let source = include_str!("../assets/visualizers/examples/everything.lua");
+        let words: HashSet<&str> = source.split(|c: char| !(c.is_alphanumeric() || c == '_')).collect();
+        for item in ITEMS {
+            let covered = words.contains(item.name);
+            if NOT_YET.contains(&item.name) {
+                assert!(!covered, "everything.lua covers {} now: take it out of NOT_YET", item.name);
+            } else {
+                assert!(covered, "everything.lua doesn't call {}: give it a line there", item.name);
+            }
+        }
+        for name in NOT_YET {
+            assert!(item(name).is_some(), "{name} in NOT_YET isn't in the API");
+        }
+    }
+
     #[test]
     fn versions_and_types_are_sound() {
         let classes: HashSet<&str> = CLASSES.iter().map(|c| c.name).collect();
