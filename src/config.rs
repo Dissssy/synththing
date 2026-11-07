@@ -124,7 +124,7 @@ pub struct Config {
     #[serde(default)]
     pub controls_bar: ControlsBar,
     /// The mini player's buttons and sliders, left to right (Windows' tray
-    /// mini player); what doesn't fit goes behind its ⋯ button.
+    /// mini player), on as many rows as they take.
     #[serde(default)]
     pub mini_controls: MiniControls,
     /// The Songs list's columns, sorting and grouping.

@@ -138,12 +138,12 @@ pub(super) struct MiniPlayer {
     /// no mouse move tells it, so the button under it wouldn't take a
     /// click until the mouse moved.
     pointer_frames: u8,
-    /// The controls line's items that don't fit show on a line of their
-    /// own (its ⋯ button).
-    more: bool,
-    /// How wide each controls line item was drawn (`mini_controls_ui`),
-    /// and its ⋯ button, to tell what fits next frame.
-    drawn: std::collections::HashMap<Option<BarItem>, f32>,
+    /// Which of Preferences, Song info and Help were open (`main_shows`),
+    /// so opening one from here brings the main window back.
+    main_shows: [bool; 3],
+    /// How wide each of the buttons and sliders was drawn
+    /// (`mini_controls_ui`), to tell what fits on a row next frame.
+    drawn: std::collections::HashMap<BarItem, f32>,
     /// Frames left to wait for the drawer's resize to land
     /// (`RESIZE_FRAMES`); the drawer button waits too.
     resize_frames: u8,
@@ -166,8 +166,8 @@ impl Default for MiniPlayer {
             picking: false,
             pointer_frames: 0,
             resize_frames: 0,
-            more: false,
             drawn: std::collections::HashMap::new(),
+            main_shows: [false; 3],
             strip_height: STRIP.y,
         }
     }
@@ -209,6 +209,7 @@ impl App {
     /// `cursor` (physical screen pixels, at `pixels_per_point`) the first
     /// time.
     pub(super) fn open_mini(&mut self, ctx: &egui::Context, cursor: [f32; 2], pixels_per_point: f32) {
+        self.mini.main_shows = self.main_shows();
         if self.mini.open {
             // Put away (hidden as the mini player): just shown again.
             self.hidden = false;
@@ -345,8 +346,13 @@ impl App {
             egui::CentralPanel::default().frame(frame).show(ui, |ui| self.mini_drawer_ui(ui, shared));
         }
 
-        // What the main window shows: it comes back for it.
-        if self.preferences_open || self.details_for.is_some() || self.help.is_some() {
+        // What only the main window shows, opened from here (Song info
+        // from a row's menu, say): it comes back for it. Left open there
+        // before, it waits for the main window.
+        let shows = self.main_shows();
+        let opened = shows.iter().zip(self.mini.main_shows).any(|(&now, before)| now && !before);
+        self.mini.main_shows = shows;
+        if opened {
             self.show_window(&ctx);
         }
     }
@@ -421,7 +427,9 @@ impl App {
         self.mini_controls_ui(ui, view);
 
         // As tall as it turned out (once, or when the theme changes).
-        let height = ui.min_rect().bottom() - top + 2.0 * MARGIN;
+        // (From where the last row ended: the panel's own rect is the
+        // height it was given, so it would never shrink.)
+        let height = ui.cursor().top() - ui.spacing().item_spacing.y - top + 2.0 * MARGIN;
         if (height - self.mini.strip_height).abs() > 0.5 {
             self.mini.strip_height = height;
             self.mini.size_limits(&ctx);
@@ -430,56 +438,52 @@ impl App {
     }
 
     /// The mini player's buttons and sliders (`Config::mini_controls`),
-    /// left to right, as many as fit; the rest behind a ⋯ button at the
-    /// end, which shows them on a line of their own under it (a popup
-    /// would be cut off by the small window).
+    /// left to right, on as many rows as they take: all of them always
+    /// there.
     fn mini_controls_ui(&mut self, ui: &mut egui::Ui, view: &crate::engine::EngineView) {
         use super::controls_bar::{ICON_BUTTON_WIDTH, MIN_SLIDER, PLAY_WIDTH, Shapes, SPEAKER_WIDTH, SPEED_TEXT_WIDTH, VOLUME_TEXT_WIDTH};
         let items: Vec<BarItem> = self.config.mini_controls.0.iter().filter(|item| self.bar_item_shown(item)).cloned().collect();
         let gap = ui.spacing().item_spacing.x;
-        // How wide each is, as drawn last frame (buttons come out a little
+        // How wide each is: as drawn last frame (buttons come out a little
         // wider than their least size), else as worked out.
-        let width = |drawn: &std::collections::HashMap<Option<BarItem>, f32>, item: Option<&BarItem>| {
-            drawn.get(&item.cloned()).copied().unwrap_or(match item {
-                Some(BarItem::PlayPause) => PLAY_WIDTH,
-                Some(BarItem::Volume) => SPEAKER_WIDTH + MIN_SLIDER + VOLUME_TEXT_WIDTH + 2.0 * gap,
-                Some(BarItem::Speed) => ICON_BUTTON_WIDTH + MIN_SLIDER + SPEED_TEXT_WIDTH + 2.0 * gap,
+        let width = |item: &BarItem| {
+            self.mini.drawn.get(item).copied().unwrap_or(match item {
+                BarItem::PlayPause => PLAY_WIDTH,
+                BarItem::Volume => SPEAKER_WIDTH + MIN_SLIDER + VOLUME_TEXT_WIDTH + 2.0 * gap,
+                BarItem::Speed => ICON_BUTTON_WIDTH + MIN_SLIDER + SPEED_TEXT_WIDTH + 2.0 * gap,
                 _ => ICON_BUTTON_WIDTH,
             })
         };
+        // Rows, each as full as it fits (an item wider than a whole row
+        // gets one to itself).
+        let room = ui.available_width();
+        let mut rows: Vec<Vec<BarItem>> = Vec::new();
+        let mut used = room;
+        for item in items {
+            let w = width(&item);
+            if used + gap + w > room {
+                rows.push(Vec::new());
+                used = -gap;
+            }
+            used += gap + w;
+            rows.last_mut().expect("a row was just added").push(item);
+        }
         ui.spacing_mut().slider_width = MIN_SLIDER;
-        let mut rest = Vec::new();
-        ui.horizontal(|ui| {
-            let more = width(&self.mini.drawn, None);
-            for (i, item) in items.iter().enumerate() {
-                let last = i + 1 == items.len();
-                let room = ui.available_width() - if last { 0.0 } else { gap + more };
-                if !rest.is_empty() || width(&self.mini.drawn, Some(item)) > room {
-                    rest.push(item.clone());
-                    continue;
-                }
-                let before = ui.cursor().left();
-                self.controls_item_ui(ui, view, item, Shapes::SLIDERS);
-                self.mini.drawn.insert(Some(item.clone()), ui.cursor().left() - before - gap);
-            }
-            if !rest.is_empty() {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    let hover = if self.mini.more { "Hide the rest" } else { "The rest of the buttons" };
-                    let button = ui.add(icon_button("dots-three").selected(self.mini.more)).on_hover_text(hover);
-                    if button.clicked() {
-                        self.mini.more = !self.mini.more;
-                    }
-                    self.mini.drawn.insert(None, button.rect.width());
-                });
-            }
-        });
-        if self.mini.more && !rest.is_empty() {
-            ui.horizontal_wrapped(|ui| {
-                for item in &rest {
-                    self.controls_item_ui(ui, view, item, Shapes::SLIDERS);
+        for row in rows {
+            ui.horizontal(|ui| {
+                for item in row {
+                    let before = ui.cursor().left();
+                    self.controls_item_ui(ui, view, &item, Shapes::SLIDERS);
+                    self.mini.drawn.insert(item, ui.cursor().left() - before - gap);
                 }
             });
         }
+    }
+
+    /// Whether Preferences, Song info and Help are open: what only the
+    /// main window shows.
+    fn main_shows(&self) -> [bool; 3] {
+        [self.preferences_open, self.details_for.is_some(), self.help.is_some()]
     }
 
     /// Open or close the drawer, always below the strip (so the button

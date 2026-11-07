@@ -231,13 +231,13 @@ impl App {
     /// Appearance > Mini player buttons: the mini player's one line of
     /// buttons and sliders as a list.
     fn mini_controls_list_ui(&self, ui: &mut egui::Ui, controls: &mut config::MiniControls) {
-        let info = "The buttons and sliders under the mini player's seek bar, left to right. What doesn't fit goes \
-                    behind a ⋯ button at the end, which shows it on a line of its own.";
+        let info = "The buttons and sliders under the mini player's seek bar, left to right, on as many rows as \
+                    they take.";
         let group = BarList {
             key: "mini_controls",
             title: "Mini player buttons",
             icon: "picture-in-picture",
-            hint: "Left to right, the rest behind ⋯",
+            hint: "Left to right, on as many rows as they take",
             info,
             usual: &config::MiniControls::USUAL,
             sections: false,
