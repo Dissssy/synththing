@@ -220,13 +220,16 @@ pub fn main() -> Result<()> {
         system_font_fallback: false,
         ..Default::default()
     };
-    // DX12 on Windows, unless WGPU_BACKEND picks another: wgpu's own pick
-    // there, Vulkan, could hang the window for good while it was resized.
+    // On Windows, the graphics API picked in Preferences (Vulkan unless
+    // changed, see `GraphicsBackend`); WGPU_BACKEND still overrides it.
     #[cfg(windows)]
     if eframe::wgpu::Backends::from_env().is_none()
         && let eframe::egui_wgpu::WgpuSetup::CreateNew(setup) = &mut options.wgpu_options.wgpu_setup
     {
-        setup.instance_descriptor.backends = eframe::wgpu::Backends::DX12;
+        setup.instance_descriptor.backends = match app.graphics_backend() {
+            crate::config::GraphicsBackend::Dx12 => eframe::wgpu::Backends::DX12,
+            crate::config::GraphicsBackend::Vulkan => eframe::wgpu::Backends::VULKAN,
+        };
     }
     eframe::run_native(
         "synththing",
