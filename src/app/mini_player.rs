@@ -444,17 +444,18 @@ impl App {
     /// left to right, on as many rows as they take: all of them always
     /// there.
     fn mini_controls_ui(&mut self, ui: &mut egui::Ui, view: &crate::engine::EngineView) {
-        use super::controls_bar::{ICON_BUTTON_WIDTH, MIN_SLIDER, PLAY_WIDTH, Shapes, SPEAKER_WIDTH, SPEED_TEXT_WIDTH, VOLUME_TEXT_WIDTH};
+        use super::controls_bar::{MIN_SLIDER, PLAY_WIDTH, Shapes, SPEAKER_WIDTH, SPEED_TEXT_WIDTH, VOLUME_TEXT_WIDTH};
         let items: Vec<BarItem> = self.config.mini_controls.0.iter().filter(|item| self.bar_item_shown(item)).cloned().collect();
         let gap = ui.spacing().item_spacing.x;
+        let button = super::controls_bar::icon_button_width(ui.spacing());
         // How wide each is: as drawn last frame (buttons come out a little
         // wider than their least size), else as worked out.
         let width = |item: &BarItem| {
             self.mini.drawn.get(item).copied().unwrap_or(match item {
                 BarItem::PlayPause => PLAY_WIDTH,
                 BarItem::Volume => SPEAKER_WIDTH + MIN_SLIDER + VOLUME_TEXT_WIDTH + 2.0 * gap,
-                BarItem::Speed => ICON_BUTTON_WIDTH + MIN_SLIDER + SPEED_TEXT_WIDTH + 2.0 * gap,
-                _ => ICON_BUTTON_WIDTH,
+                BarItem::Speed => button + MIN_SLIDER + SPEED_TEXT_WIDTH + 2.0 * gap,
+                _ => button,
             })
         };
         // Rows, each as full as it fits (an item wider than a whole row
@@ -566,7 +567,7 @@ impl App {
         ui.allocate_rect(rect, egui::Sense::hover());
         // (Under a fixed id: the visualizer adds a different number of
         // widgets from frame to frame.)
-        let corner = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(super::controls_bar::ICON_BUTTON_WIDTH, 24.0));
+        let corner = egui::Rect::from_min_size(rect.min + egui::vec2(6.0, 6.0), egui::vec2(super::controls_bar::icon_button_width(ui.spacing()), 24.0));
         let mut button_ui = ui.new_child(egui::UiBuilder::new().id_salt("mini_script_button").max_rect(corner));
         button_ui.visuals_mut().widgets.inactive.weak_bg_fill = egui::Color32::from_black_alpha(140);
         let name = self.script.path().map(super::nice_name).unwrap_or_else(|| "No script".to_string());
