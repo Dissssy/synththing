@@ -411,7 +411,7 @@ pub(super) fn inline_code_job(ui: &egui::Ui, prefix: &str, text: &str) -> egui::
     job
 }
 
-/// A toggle as a chip (a channel's, `Config::channel_chips`), like the
+/// A toggle as a chip (a channel's, `ChannelToggles::Chips`), like the
 /// library's: filled with its color while it's on, washed out to grey
 /// while it's off, outlined in the theme's hover color while hovered.
 /// Clicking it toggles.

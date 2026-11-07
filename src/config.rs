@@ -121,10 +121,9 @@ pub struct Config {
     /// with.
     #[serde(default)]
     pub album_volume: bool,
-    /// Preference: show the channel toggles as colored chips with each
-    /// channel's instrument, instead of numbered checkboxes.
+    /// Preference: how a MIDI song's channel toggles show.
     #[serde(default)]
-    pub channel_chips: bool,
+    pub channel_toggles: ChannelToggles,
     /// The controls bar's buttons and sliders, left to right.
     #[serde(default)]
     pub controls_bar: ControlsBar,
@@ -356,6 +355,30 @@ impl MiniPlayerShape {
             Self::Square => "Square",
             Self::Wide => "Wide (16:9)",
             Self::Tall => "Tall (9:16)",
+        }
+    }
+}
+
+/// How a MIDI song's channel toggles show in the Visualizer tab.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChannelToggles {
+    /// A row of small numbered checkboxes above the visualizer.
+    #[default]
+    Checkboxes,
+    /// A row of chips in each channel's color, saying what it plays.
+    Chips,
+    /// A button in the script bar, its menu the checkboxes.
+    Menu,
+}
+
+impl ChannelToggles {
+    pub const ALL: [Self; 3] = [Self::Checkboxes, Self::Chips, Self::Menu];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Checkboxes => "Checkboxes",
+            Self::Chips => "Chips",
+            Self::Menu => "Menu",
         }
     }
 }

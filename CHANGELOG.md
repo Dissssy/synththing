@@ -7,6 +7,10 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Visualizer scripts can load PNG and JPEG pictures from their assets folder with `image_load(name)`, as sprites: photos for backgrounds, or pixel art and sprite sheets drawn in any image editor. Pictures load in the background, so a big one never holds up a frame.
 - New visualizer, Radial Art: a ring of spectrum bars over the song's album art, or over your own pictures (pick one, or shuffle them song by song), with the time signature or the time in the song in the middle.
+- Preferences > Visualizer > Channel toggles can now put a MIDI song's channel toggles in a menu: a button in the Visualizer tab's script bar, its menu checkboxes saying what each channel plays (hold Shift to keep it open). The button stays, greyed out, for songs without channels. This replaces the chips on/off setting, so pick Chips again there if you used them.
+
+### Fixed
+- A MIDI song's channel checkboxes wrap onto more rows in a narrow Visualizer tab, instead of running past its edge and making the visualizer wider than the tab.
 
 ## 2.8.0 (2026-11-07)
 

@@ -7,6 +7,7 @@ use std::time::Duration;
 use eframe::egui;
 
 use crate::commands::{self, Command};
+use crate::config::ChannelToggles;
 use crate::audio::AudioCommand;
 use crate::layout::Section;
 use crate::lua_visualizer::{
@@ -191,7 +192,10 @@ impl App {
     /// visualizer is off: the script picker (which also holds what's done
     /// to a script's file), Restart, and the script's Settings, Controls and
     /// Debug; with `visualizer`, Fullscreen and recording too.
-    pub(super) fn script_bar_ui(&mut self, ui: &mut egui::Ui, visualizer: bool) {
+    /// The visualizer's (`channels`: the playing song's notes and where it
+    /// is) has its buttons too; the editor's doesn't.
+    pub(super) fn script_bar_ui(&mut self, ui: &mut egui::Ui, mut channels: Option<(&mut NotesSnapshot, f64)>) {
+        let visualizer = channels.is_some();
         let mut picked = None;
         // Wrapping onto a second row in a narrow tab, instead of cut off.
         ui.horizontal_wrapped(|ui| {
@@ -262,6 +266,11 @@ impl App {
                     }
                 }
             }
+            if let Some((notes, position)) = channels.as_mut()
+                && self.config.channel_toggles == ChannelToggles::Menu
+            {
+                self.channels_menu_ui(ui, notes, *position);
+            }
             ui.separator();
             self.script_window_buttons_ui(ui, |name, color| match color {
                 Some(color) => colored_icon_button(name, color),
@@ -302,86 +311,143 @@ impl App {
         self.script_share_button(ui);
     }
 
-    /// Per-channel mute toggles for the current MIDI file (left-click
-    /// toggle, right-click solo, "All" to re-enable everything). `notes` is
-    /// updated optimistically so this frame's preview already reflects it.
-    /// Hovering one says what it plays at `position` and its track's name.
+    /// Per-channel mute toggles for the current MIDI file, as a row above
+    /// the visualizer (unless they're a menu in the script bar,
+    /// `channels_menu_ui`). `notes` is updated optimistically so this
+    /// frame's preview already reflects it.
     pub(super) fn channels_ui(&mut self, ui: &mut egui::Ui, notes: &mut NotesSnapshot, position: f64) {
-        if !notes.detected_channels.is_empty() {
-            let mut toggle: Option<(u8, bool)> = None;
-            let mut solo: Option<u8> = None;
-            let mut enable_all = false;
+        if notes.detected_channels.is_empty() || self.config.channel_toggles == ChannelToggles::Menu {
+            return;
+        }
+        let mut edit = None;
+        let row = ui.horizontal_wrapped(|ui| {
+            ui.label("Channels:").on_hover_text("Left-click to toggle, right-click to solo");
+            if ui.small_button("All").clicked() {
+                edit = Some(ChannelEdit::All);
+            }
+            for &channel in &notes.detected_channels {
+                edit = self.channel_toggle_ui(ui, notes, channel, position).or(edit);
+            }
+        });
+        self.tour.mark(tour::Target::Channels, row.response.rect);
+        if let Some(edit) = edit {
+            self.apply_channel_edit(notes, edit);
+        }
+    }
 
-            // In the colors the script draws them in, if it said; else
-            // the keyboard visualizer's.
-            let colors = self.script.channel_colors();
-            ui.horizontal_wrapped(|ui| {
-                ui.label("Channels:")
-                    .on_hover_text("Left-click to toggle, right-click to solo");
-                if ui.small_button("All").clicked() {
-                    enable_all = true;
-                }
-                for &channel in &notes.detected_channels {
-                    let mut enabled = notes.enabled_channels[channel as usize];
-                    let [r, g, b] = colors[channel as usize].unwrap_or_else(|| lua_visualizer::default_channel_color(channel));
-                    let color = egui::Color32::from_rgb(r, g, b);
-                    let song = self.song_notes.as_deref().filter(|n| n.facts().tracks > 0);
-                    let instrument =
-                        song.map(|song| crate::midi_notes::program_name(channel, song.program_at(channel, position)));
-                    let about = |ui: &mut egui::Ui| {
-                        match song {
-                            Some(song) => {
-                                ui.strong(format!("Channel {}: {}", channel + 1, instrument.unwrap_or_default()));
-                                if let Some(name) = song.channel_name(channel) {
-                                    ui.label(format!("Track: {name}"));
-                                }
-                            }
-                            None => {
-                                ui.strong(format!("Channel {}", channel + 1));
-                            }
-                        }
-                        ui.weak("Left-click to toggle, right-click to solo");
-                    };
-                    let response = if self.config.channel_chips {
-                        let text = match instrument {
-                            Some(instrument) => format!("{} \u{b7} {instrument}", channel + 1),
-                            None => format!("Channel {}", channel + 1),
-                        };
-                        let response = toggle_chip(ui, enabled, &text, color).on_hover_ui(about);
-                        if response.clicked() {
-                            toggle = Some((channel, !enabled));
-                        }
-                        response
-                    } else {
-                        let response =
-                            channel_toggle(ui, &mut enabled, &format!("{}", channel + 1), color).on_hover_ui(about);
-                        if response.changed() {
-                            toggle = Some((channel, enabled));
-                        }
-                        response
-                    };
-                    if response.secondary_clicked() {
-                        solo = Some(channel);
+    /// The channel toggles as a button in the script bar, its menu the
+    /// checkboxes (Shift keeps it open, as elsewhere); there but disabled
+    /// for a song without channels, so the bar doesn't change size.
+    fn channels_menu_ui(&mut self, ui: &mut egui::Ui, notes: &mut NotesSnapshot, position: f64) {
+        let hover = "Channels: left-click one to toggle it, right-click to solo it";
+        let response = if notes.detected_channels.is_empty() {
+            ui.add_enabled(false, icon_button("faders")).on_disabled_hover_text("Channels: for MIDI songs")
+        } else {
+            let mut edit = None;
+            let (response, _) = egui::containers::menu::MenuButton::from_button(icon_button("faders"))
+                .config(crate::menu::config(ui.ctx()))
+                .ui(ui, |ui| {
+                    if ui.button("All").clicked() {
+                        edit = Some(ChannelEdit::All);
+                    }
+                    for &channel in &notes.detected_channels {
+                        edit = self.channel_toggle_ui(ui, notes, channel, position).or(edit);
+                    }
+                });
+            if let Some(edit) = edit {
+                self.apply_channel_edit(notes, edit);
+            }
+            response.on_hover_text(hover)
+        };
+        self.tour.mark(tour::Target::Channels, response.rect);
+    }
+
+    /// One channel's toggle, in its style: what clicking it asks for.
+    /// Hovering one says what it plays at `position` and its track's name.
+    fn channel_toggle_ui(&self, ui: &mut egui::Ui, notes: &NotesSnapshot, channel: u8, position: f64) -> Option<ChannelEdit> {
+        let mut enabled = notes.enabled_channels[channel as usize];
+        // In the colors the script draws them in, if it said; else the
+        // keyboard visualizer's.
+        let [r, g, b] = self.script.channel_colors()[channel as usize].unwrap_or_else(|| lua_visualizer::default_channel_color(channel));
+        let color = egui::Color32::from_rgb(r, g, b);
+        let song = self.song_notes.as_deref().filter(|n| n.facts().tracks > 0);
+        let instrument = song.map(|song| crate::midi_notes::program_name(channel, song.program_at(channel, position)));
+        let about = |ui: &mut egui::Ui| {
+            match song {
+                Some(song) => {
+                    ui.strong(format!("Channel {}: {}", channel + 1, instrument.unwrap_or_default()));
+                    if let Some(name) = song.channel_name(channel) {
+                        ui.label(format!("Track: {name}"));
                     }
                 }
-            });
+                None => {
+                    ui.strong(format!("Channel {}", channel + 1));
+                }
+            }
+            ui.weak("Left-click to toggle, right-click to solo");
+        };
+        let named = || match instrument {
+            Some(instrument) => format!("{} \u{b7} {instrument}", channel + 1),
+            None => format!("Channel {}", channel + 1),
+        };
+        let (response, toggled) = match self.config.channel_toggles {
+            ChannelToggles::Chips => {
+                let response = toggle_chip(ui, enabled, &named(), color).on_hover_ui(about);
+                let toggled = response.clicked();
+                (response, toggled)
+            }
+            ChannelToggles::Checkboxes => {
+                let response = channel_toggle(ui, &mut enabled, &format!("{}", channel + 1), color).on_hover_ui(about);
+                let toggled = response.changed();
+                (response, toggled)
+            }
+            ChannelToggles::Menu => {
+                let response = channel_toggle(ui, &mut enabled, &named(), color).on_hover_ui(about);
+                let toggled = response.changed();
+                (response, toggled)
+            }
+        };
+        if response.secondary_clicked() {
+            Some(ChannelEdit::Solo(channel))
+        } else if toggled {
+            Some(ChannelEdit::Set(channel, !notes.enabled_channels[channel as usize]))
+        } else {
+            None
+        }
+    }
 
-            if enable_all {
+    /// Sends `edit` to the audio thread, and makes it in `notes` already.
+    fn apply_channel_edit(&mut self, notes: &mut NotesSnapshot, edit: ChannelEdit) {
+        match edit {
+            ChannelEdit::All => {
                 for &c in &notes.detected_channels {
                     notes.enabled_channels[c as usize] = true;
                 }
                 self.send(AudioCommand::EnableAllChannels);
-            } else if let Some(channel) = solo {
+            }
+            ChannelEdit::Solo(channel) => {
                 for (i, slot) in notes.enabled_channels.iter_mut().enumerate() {
                     *slot = i == channel as usize;
                 }
                 self.send(AudioCommand::SoloChannel(channel));
-            } else if let Some((channel, enabled)) = toggle {
+            }
+            ChannelEdit::Set(channel, enabled) => {
                 notes.enabled_channels[channel as usize] = enabled;
                 self.send(AudioCommand::SetChannelEnabled(channel, enabled));
             }
         }
     }
+}
+
+/// What a click on the channel toggles asks for.
+#[derive(Clone, Copy)]
+enum ChannelEdit {
+    /// Every channel back on.
+    All,
+    /// Only this channel on.
+    Solo(u8),
+    /// This channel on or off.
+    Set(u8, bool),
 }
 
 /// The Rename script modal's state.
@@ -489,18 +555,21 @@ pub(super) fn settings_row_ui(ui: &mut egui::Ui, d: &SettingDescriptor, changed:
 /// channel's on (the check mark black or white, whichever reads better on
 /// it), outlined in it while it's off.
 pub(super) fn channel_toggle(ui: &mut egui::Ui, on: &mut bool, label: &str, color: egui::Color32) -> egui::Response {
-    ui.scope(|ui| {
-        let mark = on_color(color);
-        let visuals = ui.visuals_mut();
-        // (The label keeps its usual color: the check mark's is the widget's.)
-        visuals.override_text_color = Some(visuals.widgets.inactive.text_color());
-        let fill = if *on { color } else { color.gamma_multiply(0.15) };
-        for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
-            state.bg_fill = fill;
-            state.bg_stroke = egui::Stroke::new(state.bg_stroke.width.max(1.0), color);
-            state.fg_stroke.color = mark;
-        }
-        ui.checkbox(on, label)
-    })
-    .inner
+    // Restyled in place rather than in a child `ui.scope`: a child Ui starts
+    // at the cursor, so its widget can't wrap, and in a `horizontal_wrapped`
+    // row the toggles would run past the edge (and widen everything below).
+    let style = ui.style().clone();
+    let mark = on_color(color);
+    let visuals = ui.visuals_mut();
+    // (The label keeps its usual color: the check mark's is the widget's.)
+    visuals.override_text_color = Some(visuals.widgets.inactive.text_color());
+    let fill = if *on { color } else { color.gamma_multiply(0.15) };
+    for state in [&mut visuals.widgets.inactive, &mut visuals.widgets.hovered, &mut visuals.widgets.active] {
+        state.bg_fill = fill;
+        state.bg_stroke = egui::Stroke::new(state.bg_stroke.width.max(1.0), color);
+        state.fg_stroke.color = mark;
+    }
+    let response = ui.checkbox(on, label);
+    ui.set_style(style);
+    response
 }

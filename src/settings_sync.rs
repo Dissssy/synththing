@@ -111,7 +111,7 @@ pub const CATEGORIES: &[Category] = &[
             setting("play_counts", "When songs count as played or skipped", &["play_counts"]),
             setting("dropped_songs", "Where dropped songs go", &["dropped_songs"]),
             setting("heavy_midi", "Warning before a very large MIDI file", &["warn_heavy_midi"]),
-            setting("channel_chips", "Channel chips", &["channel_chips"]),
+            setting("channel_toggles", "Channel toggles", &["channel_toggles"]),
             setting("controls_bar", "Controls bar layout", &["controls_bar"]),
             setting("mini_controls", "Mini player buttons", &["mini_controls"]),
             setting("even_volume", "Even out volume", &["even_volume", "volume_target", "album_volume"]),
