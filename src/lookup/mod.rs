@@ -13,6 +13,7 @@
 pub mod art;
 pub mod artists;
 pub mod details;
+pub mod lrclib;
 pub mod matching;
 pub mod musicbrainz;
 

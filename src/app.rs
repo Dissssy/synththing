@@ -84,6 +84,7 @@ mod soundfonts_panel;
 mod help;
 mod log_panel;
 mod lyrics;
+mod lyrics_lookup;
 mod updates;
 mod credits_window;
 mod dock;
@@ -605,6 +606,8 @@ pub struct App {
     now_playing_art: crate::album_art::AlbumArt,
     /// The playing song's lyrics (`lyrics.rs`).
     lyrics: lyrics::LyricsState,
+    /// Songs' lyrics looked up at LRCLIB (`lyrics_lookup.rs`).
+    lyrics_lookup: lyrics_lookup::LyricsLookup,
 }
 
 impl App {
@@ -855,6 +858,7 @@ impl App {
             mobile_state: mobile::Mobile::default(),
             now_playing_art: crate::album_art::AlbumArt::default(),
             lyrics: lyrics::LyricsState::default(),
+            lyrics_lookup: lyrics_lookup::LyricsLookup::default(),
         };
         #[cfg(windows)]
         if offer_install {
@@ -1099,6 +1103,7 @@ impl App {
         let held = self.update_offered();
         frame_timing::time("poll_sync", || self.poll_sync(held));
         frame_timing::time("lookup_tick", || self.lookup_tick(ctx, held));
+        frame_timing::time("lyrics_lookup_tick", || self.lyrics_lookup_tick(ctx, held));
         frame_timing::time("background_tick", || self.background_tick(ctx));
         frame_timing::time("api_tick", || self.api_tick(ctx, &view));
         // (Minimized, eframe still draws the window, but only 10 times a

@@ -5,7 +5,8 @@
 //! song when it was imported), then a MIDI file's own lyric events, then
 //! the lyrics in its tags (which are often LRC too). Where the source
 //! times each word (enhanced LRC, MIDI's syllables) the lines carry those
-//! times too, so the words fill in as they're sung.
+//! times too, so the words fill in as they're sung. A song with none of
+//! its own has LRCLIB's, once it's been looked up there.
 
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -20,6 +21,8 @@ pub enum Source {
     Midi,
     /// The song's own tags.
     Tags,
+    /// LRCLIB (`lookup::lrclib`), for a song with none of its own.
+    Lrclib,
 }
 
 impl Source {
@@ -27,6 +30,7 @@ impl Source {
         match self {
             Source::File => "From the .lrc file beside the song",
             Source::Midi => "From the MIDI file's own lyrics",
+            Source::Lrclib => "From LRCLIB (lrclib.net)",
             Source::Tags => "From the song's tags",
         }
     }
@@ -188,7 +192,26 @@ fn word_times(line: &str, shift: i64) -> (String, Vec<(f64, usize)>) {
 }
 
 /// The song at `path`'s lyrics, if it has any (on the lyrics thread).
-pub fn read(path: PathBuf) -> Option<Lyrics> {
+pub fn read(job: Job) -> Option<Lyrics> {
+    local(&job.path).or_else(|| {
+        let record = crate::lookup::lrclib::record(job.lrclib?, job.online)?;
+        Lyrics::parse(record.text()?, Source::Lrclib)
+    })
+}
+
+/// What [`read`] reads.
+pub struct Job {
+    pub path: PathBuf,
+    /// Its lyrics at LRCLIB, if it was looked up there
+    /// (`song_store::Online::lyrics`).
+    pub lrclib: Option<i64>,
+    /// LRCLIB can be asked (else only what's kept from it is read).
+    pub online: bool,
+}
+
+/// The song at `path`'s own lyrics, if it has any.
+pub fn local(path: &Path) -> Option<Lyrics> {
+    let path = path.to_path_buf();
     let library = crate::config::music_dir().ok();
     let stored = library.as_deref().and_then(|dir| crate::song_store::key_in(dir, &path)).and_then(stored);
     let files = [Some(path.with_extension("lrc")), stored];
@@ -305,9 +328,9 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let song = dir.join("song.mp3");
         std::fs::write(&song, b"not audio").unwrap();
-        assert!(read(song.clone()).is_none());
+        assert!(local(&song).is_none());
         std::fs::write(dir.join("song.lrc"), "[00:00.00]Hello").unwrap();
-        let lyrics = read(song).unwrap();
+        let lyrics = local(&song).unwrap();
         assert_eq!((lyrics.source, lyrics.lines[0].text.as_str()), (Source::File, "Hello"));
         std::fs::remove_dir_all(dir).unwrap();
     }

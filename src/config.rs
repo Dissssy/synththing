@@ -163,6 +163,10 @@ pub struct Config {
     /// artists' pictures from Wikidata (`art_fill`), with `online_lookup`.
     #[serde(default)]
     pub fill_art: bool,
+    /// Preference: look songs without lyrics of their own up at LRCLIB
+    /// (`lookup::lrclib`), with `online_lookup`.
+    #[serde(default)]
+    pub lyrics_lookup: bool,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,

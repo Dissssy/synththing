@@ -18,10 +18,11 @@ use crate::lyrics::{self, Lyrics};
 
 /// The playing song's lyrics, read on a thread of their own.
 pub(super) struct LyricsState {
-    reader: Latest<(), PathBuf, Option<Lyrics>>,
-    /// The song asked for, and its lyrics once read (`None` inside while
-    /// reading or when it has none: `read` says which).
-    song: Option<PathBuf>,
+    reader: Latest<(), lyrics::Job, Option<Lyrics>>,
+    /// The song asked for (with its lyrics at LRCLIB, if it was looked
+    /// up there), and its lyrics once read (`None` inside while reading or
+    /// when it has none: `read` says which).
+    song: Option<(PathBuf, Option<i64>)>,
     read: bool,
     lyrics: Option<Arc<Lyrics>>,
     /// The line last scrolled to.
@@ -46,12 +47,16 @@ impl App {
             state.lyrics = lyrics.map(Arc::new);
             state.shown = None;
         }
-        if state.song != self.current_song {
-            state.song = self.current_song.clone();
+        let lrclib = self.current_song.as_deref().and_then(|p| self.songs.get(p)?.online.as_ref()?.lyrics);
+        let song = self.current_song.clone().map(|path| (path, lrclib));
+        let online = self.fetches_lyrics();
+        let state = &mut self.lyrics;
+        if state.song != song {
+            state.song = song;
             state.read = false;
             state.lyrics = None;
-            if let Some(path) = &state.song {
-                state.reader.ask((), path.clone(), ctx);
+            if let Some((path, lrclib)) = &state.song {
+                state.reader.ask((), lyrics::Job { path: path.clone(), lrclib: *lrclib, online }, ctx);
             }
         }
         state.lyrics.clone()

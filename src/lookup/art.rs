@@ -14,7 +14,8 @@ pub struct Choice {
     pub label: String,
 }
 
-fn get(url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
+/// GET `url` (with `query`) as JSON, as synththing; `None` on a 404.
+pub fn get(url: &str, query: &[(&str, &str)]) -> Result<Option<Value>> {
     let agent = format!("synththing/{} ( https://github.com/Dissssy/synththing )", crate::build_info::VERSION);
     let mut request = ureq::get(url).header("User-Agent", &agent);
     for (name, value) in query {
