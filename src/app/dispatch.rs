@@ -77,8 +77,8 @@ impl App {
             *self.dock.find_active_focused()?.1
         };
         match section {
-            Section::Songs => Some("songs"),
-            Section::Groupings => Some("playlist_rows"),
+            Section::Songs => Some(crate::song_list::LIST_KEY),
+            Section::Groupings => Some(super::playlist_panel::PLAYLIST_ROWS),
             Section::Soundfonts => Some("soundfonts"),
             Section::Queue => Some("queue"),
             Section::Wishlist => Some("wishlist"),

@@ -32,6 +32,9 @@ const SEARCH: search_box::Kind =
 use crate::select_list::{self, Selection};
 use crate::together::{self, Member};
 
+/// The Songs list's `select_list` key.
+pub const LIST_KEY: &str = "songs";
+
 /// How many ranked matches are shown for a query.
 const MAX_SEARCH_RESULTS: usize = 200;
 /// The least room the search box has beside the toolbar's buttons (else
@@ -925,7 +928,7 @@ impl SongList {
         };
         let grouped_by = group_title(&view.group);
         let is_header = |item: &Item| matches!(item, Item::Group { .. });
-        let output = select_list::show_grouped(ui, "songs", items, &mut self.selection, active, is_header, |ui, row, item| {
+        let output = select_list::show_grouped(ui, LIST_KEY, items, &mut self.selection, active, is_header, |ui, row, item| {
             let entry = match item {
                 Item::Group { label, key, count, collapsed } => {
                     let arrow = crate::app::icon(if *collapsed { "caret-right" } else { "caret-down" });

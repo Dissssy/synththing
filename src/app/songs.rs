@@ -108,6 +108,7 @@ impl App {
             }
             sync::songs_moving_ui(ui, moving);
             autoplay_clicked |= autoplay::button_ui(ui, autoplay);
+            super::follow_button_ui(ui, crate::song_list::LIST_KEY);
         };
         // (Both the list's snapshot and the trailing widgets read the song
         // info, one after the other.)
