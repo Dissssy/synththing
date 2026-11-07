@@ -409,7 +409,7 @@ impl App {
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
         let mut script_log = self.config.script_log_to_app;
         let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
-        let mut channel_chips = self.config.channel_chips;
+        let mut channel_toggles = self.config.channel_toggles;
         let mut controls_bar = self.config.controls_bar.clone();
         let mut mini_controls = self.config.mini_controls.clone();
         let mut buffer_ms = self.buffer_ms;
@@ -751,11 +751,23 @@ impl App {
                     );
                     with_info(
                         ui,
-                        "The channel toggles above the visualizer as chips in each channel's color, \
-                         saying what it plays (\"3 \u{b7} Violin\"): click one to turn its channel off \
-                         (it goes grey) or back on, right-click to hear only that one. Off: small \
-                         numbered checkboxes, with the instrument when you hover one.",
-                        |ui| ui.checkbox(&mut channel_chips, "Channel toggles as chips with instrument names"),
+                        "How a MIDI song's channel toggles show in the Visualizer tab. Checkboxes: \
+                         small numbered ones above the visualizer, with the instrument when you hover \
+                         one. Chips: in each channel's color, saying what it plays (\"3 \u{b7} Violin\"), \
+                         grey while off. Menu: a button in the script bar, its menu the checkboxes \
+                         (hold Shift to keep it open). Click one to turn its channel off or back on, \
+                         right-click to hear only that one.",
+                        |ui| {
+                            let label = setting_label(ui, "Channel toggles");
+                            let combo = setting_combo(ui, "channel_toggles", 0.0)
+                                .selected_text(channel_toggles.name())
+                                .show_ui(ui, |ui| {
+                                    for style in crate::config::ChannelToggles::ALL {
+                                        ui.selectable_value(&mut channel_toggles, style, style.name());
+                                    }
+                                });
+                            label | combo.response
+                        },
                     );
                 });
                 settings_group("Scripts").icon("code").show(ui, |ui| {
@@ -902,7 +914,7 @@ impl App {
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
             || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
-            || channel_chips != self.config.channel_chips
+            || channel_toggles != self.config.channel_toggles
             || controls_bar != self.config.controls_bar
             || mini_controls != self.config.mini_controls
             || buffer_ms != self.buffer_ms
@@ -932,7 +944,7 @@ impl App {
             self.config.volume_target = Some(volume_target).filter(|&t| t != loudness::DEFAULT_TARGET);
             self.config.album_volume = album_volume;
             self.send_volume();
-            self.config.channel_chips = channel_chips;
+            self.config.channel_toggles = channel_toggles;
             self.config.controls_bar = controls_bar;
             self.config.mini_controls = mini_controls;
             self.config.script_log_to_app = script_log;

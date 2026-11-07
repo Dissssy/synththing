@@ -15,7 +15,7 @@ use crate::lua_visualizer::{
 };
 use crate::visualizer::{DisplayMode, NotesSnapshot, VisualizerPanel};
 
-use super::{App, naming, title_of, tour};
+use super::{App, naming, title_of};
 
 impl App {
     /// Script picker + channel toggles + error banner + the live preview.
@@ -25,12 +25,11 @@ impl App {
         mut notes: NotesSnapshot,
         playback: EngineView,
     ) {
-        self.script_bar_ui(ui, true);
+        self.script_bar_ui(ui, Some((&mut notes, playback.position)));
 
         self.script_error_ui(ui, true);
 
-        let channels = ui.scope(|ui| self.channels_ui(ui, &mut notes, playback.position)).response.rect;
-        self.tour.mark(tour::Target::Channels, channels);
+        self.channels_ui(ui, &mut notes, playback.position);
 
         self.show_visualizer(ui, &notes, &playback, DisplayMode::Window);
     }

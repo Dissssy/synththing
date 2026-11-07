@@ -280,7 +280,7 @@ impl App {
     /// normally hosts it) is closed.
     pub(super) fn editor_section_ui(&mut self, ui: &mut egui::Ui) {
         if !self.is_open(Section::Visualizer) {
-            self.script_bar_ui(ui, false);
+            self.script_bar_ui(ui, None);
         }
         self.script_error_ui(ui, false);
         self.visualizer_editor_ui(ui);
