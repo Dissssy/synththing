@@ -252,7 +252,7 @@ impl App {
                 Page::Preferences => self.mobile_preferences_ui(ui),
                 Page::Updates => {
                     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-                        if self.updates_body_ui(ui, true) {
+                        if self.updates_body_ui(ui) {
                             self.updates_message = None;
                             self.mobile_state.page = Page::NowPlaying;
                         }
