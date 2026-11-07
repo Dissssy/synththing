@@ -107,6 +107,8 @@ const SPRITES: &str = "Sprites";
 const AUDIO: &str = "Audio data";
 const MIDI: &str = "MIDI data";
 const PLAYBACK: &str = "Playback & timing";
+const CLOCK: &str = "Date & time";
+const MATHS: &str = "Noise & easing";
 const RECORDING: &str = "Recording";
 const PLAYLIST: &str = "Playlist";
 const MUSICAL: &str = "Musical timing";
@@ -147,6 +149,10 @@ pub const ITEMS: &[Item] = &[
     f("pop_view", DRAWING, "0.6.0", &[], &[], "go back to the translate and clip push_view saved"),
     f("hsv", DRAWING, "0.6.0", &[d("hue", "number", "degrees, wraps"), d("saturation", "number", "0 to 1"), d("value", "number", "0 to 1"), od("a", "number", "0 to 1")], &[p("color", COLOR)], "a color from hue, saturation and value"),
     f("mix", DRAWING, "0.6.0", &[p("color1", COLOR), p("color2", COLOR), d("t", "number", "0 is color1, 1 is color2")], &[p("color", COLOR)], "a color between two, alpha included"),
+    f("noise", MATHS, "next", &[p("x", "number"), opt("y", "number"), opt("z", "number")], &[d("value", "number", "-1 to 1")], "smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value"),
+    f("ease", MATHS, "next", &[d("curve", "string", "\"linear\", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce"), d("t", "number", "0 to 1, clamped")], &[p("value", "number")], "t along an easing curve (back and elastic overshoot past 0 and 1)"),
+    f("random", MATHS, "next", &[d("seed", "integer", "the same seed always gives the same numbers")], &[p("generator", "Random")], "a random number generator of its own, apart from math.random"),
+    f("theme", DRAWING, "next", &[], &[p("theme", "Theme")], "the app theme's colors, to match the look the user picked (the default theme in previews)"),
     f("approach", PLAYBACK, "0.6.0", &[p("current", "number"), p("target", "number"), d("rate", "number", "per second"), od("rate_down", "number", "per second, going down")], &[p("value", "number")], "smoothing by the second, the same at any frame rate"),
     // Text
     f("text", TEXT, "0.1.5", &[p("x", "number"), p("y", "number"), p("text", "string"), p("color", COLOR), od("height", "number", "line height in pixels, FONT_HEIGHT if not given")], SIZE, "draw pixel text (Monogram; Japanese, Korean and Chinese from Noto), and get the size drawn"),
@@ -197,12 +203,18 @@ pub const ITEMS: &[Item] = &[
     c("DT", PLAYBACK, "0.1.1", "number", "seconds since the previous render() call (0.0 on the first, at most 0.25)"),
     c("TIME", PLAYBACK, "0.1.4", "number", "seconds since this script started, wall clock, uncapped"),
     c("FRAME", PLAYBACK, "0.1.4", "integer", "frames rendered since this script started (1 on the first)"),
+    // Date & time
+    f("now", CLOCK, "next", &[od("utc", "boolean", "true for UTC, local time if not given")], &[p("date", "Date")], "today's date and the time of day; recording time in a recording"),
+    f("unix_time", CLOCK, "next", &[], &[p("seconds", "number")], "seconds since 1970 (UTC), fractional; recording time in a recording"),
+    f("format_time", CLOCK, "next", &[d("format", "string", "strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p..."), od("time", "number|Date", "a unix_time() or now() result, now if not given")], &[p("text", "string")], "a date as text"),
+    f("song_details", PLAYBACK, "next", &[], &[p("details", "SongDetails|nil")], "what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it"),
     // Recording
     f("recording", RECORDING, "0.4.0", &[], &[p("recording", "Recording|nil")], "the recording the visualizer is part of, or nil"),
     f("recording_ready", RECORDING, "0.4.0", &[], &[], "with record_prepare: done preparing; the video starts with the next frame"),
     f("recording_done", RECORDING, "0.4.0", &[], &[], "with record_prepare: this song's take is over; the recording ends or the playlist moves on"),
     // Playlist
     f("playlist", PLAYLIST, "0.2.0", &[], &[p("playlist", "Playlist|nil")], "the current playlist, read-only, or nil"),
+    f("up_next", PLAYLIST, "next", &[od("count", "integer", "at most this many, all if not given")], &[p("songs", "UpNextSong[]")], "what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it"),
     f("play_track", PLAYLIST, "0.2.0", &[p("index", "integer")], &[], "play the current playlist's index-th song"),
     f("next_track", PLAYLIST, "0.2.0", &[], &[], "the Next button"),
     f("previous_track", PLAYLIST, "0.2.0", &[], &[], "the Previous button"),
@@ -353,6 +365,118 @@ pub const CLASSES: &[Class] = &[
         name: "SongNote",
         summary: "a whole note of the song (notes_between()), times in song seconds",
         fields: &[p("id", "integer"), p("channel", "integer"), p("key", "integer"), p("velocity", "integer"), p("start", "number"), p("stop", "number")],
+    },
+    Class {
+        name: "UpNextSong",
+        summary: "a song coming up (up_next())",
+        fields: &[
+            d("name", "string", "as the app shows it"),
+            opt("title", "string"),
+            opt("artist", "string"),
+            opt("album", "string"),
+            od("length", "number", "seconds"),
+            d("queued", "boolean", "in the queue, rather than what plays after it"),
+        ],
+    },
+    Class {
+        name: "SongDetails",
+        summary: "what the library knows of a song (song_details()), with the user's edits; a field it doesn't know is nil. Keys are the ones song name patterns use",
+        fields: &[
+            opt("title", "string"),
+            od("artist", "string[]", "a song can be by several"),
+            opt("album_artist", "string[]"),
+            opt("album", "string"),
+            opt("composer", "string[]"),
+            opt("genre", "string[]"),
+            opt("track", "integer"),
+            opt("disc", "integer"),
+            opt("year", "integer"),
+            opt("grouping", "string"),
+            opt("comment", "string"),
+            od("length", "number", "seconds"),
+            opt("bpm", "number"),
+            od("notes", "integer", "a MIDI file's"),
+            od("file_name", "string", "without its extension"),
+            od("file_extension", "string", "lowercase"),
+            od("size", "number", "MB"),
+            od("bit_rate", "number", "kbps"),
+            opt("sample_rate", "integer"),
+            od("imported", "integer", "when it came into the library, Unix seconds"),
+            od("tag", "string[]", "its tags' names"),
+            p("starred", "boolean"),
+            p("compilation", "boolean"),
+            p("composer_as_artist", "boolean"),
+            opt("sort_title", "string"),
+            opt("sort_album", "string"),
+            opt("sort_artist", "string"),
+            opt("sort_album_artist", "string"),
+            opt("sort_composer", "string"),
+            od("start_time", "number", "seconds"),
+            od("stop_time", "number", "seconds"),
+            od("volume_adjust", "number", "-100 to 100 (%)"),
+            p("skip_shuffle", "boolean"),
+            p("remember_position", "boolean"),
+            opt("musicbrainz_release", "string"),
+            od("added_by", "string", "the Local API program that added it"),
+            p("matched", "boolean"),
+            p("album_matched", "boolean"),
+            od("loudness", "number", "LUFS"),
+            od("plays", "integer", "on every device"),
+            opt("skips", "integer"),
+            od("last_played", "integer", "Unix seconds"),
+            od("last_skipped", "integer", "Unix seconds"),
+        ],
+    },
+    Class {
+        name: "Theme",
+        summary: "the app theme's colors (theme())",
+        fields: &[
+            p("name", "string"),
+            d("dark", "boolean", "a dark theme rather than a light one"),
+            d("background", "Color", "behind the tabs and panels"),
+            d("window", "Color", "windows, popups and menus"),
+            d("faint", "Color", "subtle stripes and highlights"),
+            d("deep", "Color", "text fields and the deepest backgrounds"),
+            d("text", "Color", "labels and other text"),
+            d("widget_text", "Color", "text on buttons and in fields"),
+            d("strong_text", "Color", "headings, and text being hovered"),
+            d("weak_text", "Color", "secondary text"),
+            d("selection", "Color", "selected items"),
+            d("accent", "Color", "focus outlines, checkmarks and slider fills"),
+            p("link", "Color"),
+            p("warning", "Color"),
+            p("error", "Color"),
+            d("code", "Color", "behind inline code"),
+            d("widget", "Color", "buttons and fields"),
+            d("widget_hovered", "Color", "a button being hovered"),
+            d("widget_pressed", "Color", "a button being pressed"),
+            d("widget_outline", "Color", "around a widget being hovered or pressed"),
+            d("border", "Color", "separators and borders"),
+            d("playing", "Color", "the playing song, in lists"),
+            d("star", "Color", "starred songs, in lists"),
+        ],
+    },
+    Class {
+        name: "Random",
+        summary: "a seeded generator (random()): gen:next() a float in [0, 1), gen:next(m) a whole number 1 to m, gen:next(m, n) m to n",
+        fields: &[d("next", "fun(self: Random, m?: integer, n?: integer): number", "the next number, like math.random")],
+    },
+    Class {
+        name: "Date",
+        summary: "a date and time of day (now())",
+        fields: &[
+            p("year", "integer"),
+            d("month", "integer", "1 to 12"),
+            d("day", "integer", "1 to 31"),
+            d("hour", "integer", "0 to 23"),
+            d("minute", "integer", "0 to 59"),
+            d("second", "integer", "0 to 59"),
+            d("ms", "integer", "0 to 999"),
+            d("weekday", "integer", "1 is Monday, 7 is Sunday"),
+            d("yearday", "integer", "1 is 1 January"),
+            d("utc_offset", "integer", "seconds ahead of UTC"),
+            d("unix", "number", "the same moment as unix_time()"),
+        ],
     },
     Class {
         name: "AlbumArt",
@@ -818,15 +942,56 @@ mod tests {
         assert_eq!(ours.len(), ITEMS.len(), "a name is in ITEMS twice");
     }
 
+    /// The Everything example (assets/visualizers/examples/everything.lua)
+    /// calls the whole API: every name in ITEMS shows up in it, but for
+    /// these, which it doesn't cover yet. The list only shrinks: a new API
+    /// call gets a line in everything.lua, not a place here.
+    #[test]
+    fn everything_example_calls_the_api() {
+        const NOT_YET: &[&str] = &[
+        "circle_outline", "triangle", "polygon", "pixel", "set_clear_color", "shift_frame", "translate", "clip", "push_view", "pop_view", "hsv",
+        "mix", "approach", "sprite_register", "sprite", "sprite_size", "blit", "album_art", "fft_left", "fft_right", "fft_bin", "fft_freq",
+        "fft_band", "level_left", "level_right", "peak_left", "peak_right", "onset", "history_left", "history_right", "note_name", "note_freq",
+        "freq_note", "SAMPLE_RATE", "active_notes", "upcoming_notes", "notes_between", "midi_channels", "channel_enabled", "set_channel_enabled",
+        "channel_program", "channel_name", "channel_colors", "NOTE_LOOKAHEAD", "playback", "set_paused", "seek", "set_speed", "script_options",
+        "display_mode", "is_mobile", "DT", "FRAME", "recording_ready", "recording_done", "playlist", "play_track", "next_track", "previous_track",
+        "set_loop", "set_shuffle", "beat", "time_at_beat", "bar", "tempo", "time_signature", "has_focus", "mouse", "mouse_delta", "scroll",
+        "mouse_down", "mouse_pressed", "mouse_released", "touches", "set_cursor_visible", "set_cursor_locked", "input_register", "input",
+        "input_down", "input_value", "pad_axis", "gamepads", "key_down", "key_pressed", "key_released", "text_typed", "typing_begin", "typing_state",
+        "typing_end", "play_note", "note_on", "note_off", "stop_notes", "notes_playable", "midi_send", "sound_register", "sound_play",
+        "sequence_register", "sequence_play", "sequence_stop", "log", "log_app", "debug_locals", "setting_bool", "setting_int", "setting_float",
+        "setting_color", "setting_string", "setting_selection", "settings_preset", "store_get", "store_set", "shared_get", "shared_set",
+        "read_asset", "list_assets",
+        ];
+        let source = include_str!("../assets/visualizers/examples/everything.lua");
+        let words: HashSet<&str> = source.split(|c: char| !(c.is_alphanumeric() || c == '_')).collect();
+        for item in ITEMS {
+            let covered = words.contains(item.name);
+            if NOT_YET.contains(&item.name) {
+                assert!(!covered, "everything.lua covers {} now: take it out of NOT_YET", item.name);
+            } else {
+                assert!(covered, "everything.lua doesn't call {}: give it a line there", item.name);
+            }
+        }
+        for name in NOT_YET {
+            assert!(item(name).is_some(), "{name} in NOT_YET isn't in the API");
+        }
+    }
+
     #[test]
     fn versions_and_types_are_sound() {
         let classes: HashSet<&str> = CLASSES.iter().map(|c| c.name).collect();
         let builtin = ["number", "integer", "string", "boolean", "any", "nil", "table"];
-        let known = |ty: &str| {
+        let named = |ty: &str| {
             // `table<K, V>`, `(A|B)[]`, `"literal"`: check the named parts.
             ty.split(|c: char| "|[]()<>, ".contains(c))
                 .filter(|part| !part.is_empty() && !part.starts_with('"') && part != &"table")
                 .all(|part| builtin.contains(&part) || classes.contains(part))
+        };
+        // A method, `fun(self: C, x?: T): R`: the types after each colon.
+        let known = |ty: &str| match ty.strip_prefix("fun(") {
+            Some(rest) => rest.split(':').skip(1).all(|after| named(after.split([',', ')']).next().unwrap_or(""))),
+            None => named(ty),
         };
         for (name, since) in all_since() {
             assert!(since == "next" || semver::Version::parse(since).is_ok(), "{name}: {since}");

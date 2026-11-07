@@ -9,6 +9,16 @@ What changed in each version of synththing, newest first. The app shows the new 
 - MIDI files' own lyrics show in Lyrics, syllable by syllable, and karaoke `.kar` files play and show their words.
 - Preferences > Library > Fetch lyrics from LRCLIB (with the MusicBrainz lookup): songs with no timed lyrics of their own get LRCLIB's (lrclib.net), timed where it has them (over untimed lyrics in their tags). The device that looks albums up finds them, one song at a time in the background; which lyrics each song has syncs to your other devices, which each fetch them once and keep them.
 - Song info > Options > Lyrics offset: moves a song's timed lyrics later (or sooner, below zero) when they're off from the recording. Synced like the song's other options.
+- Visualizer scripts can tell the time: `now()` gives today's date and the time of day (local, or UTC), `unix_time()` the seconds since 1970, and `format_time("%H:%M")` turns either into text. In a recording the clock is recording time, so a clock drawn into the video reads as it would have live.
+- Visualizer scripts get `noise(x, y, z)`, smooth simplex noise, and `ease("out_cubic", t)`, the common easing curves (sine, quad, cubic, quart, quint, expo, circ, back, elastic, bounce, each in, out or in-out).
+- New script > Examples > Everything: a page that calls the script API and shows what each part gives back, to see it all working at once.
+- Visualizer scripts can show what's coming up with `up_next()`: the queue's songs, then what the playlist, album or Autoplay plays after them.
+- Visualizer scripts can read what the library knows of the playing song with `song_details()`: your edits, tags, whether it's starred, its plays and skips, when it was last played and every other song field, kept up to date as they change.
+- Visualizer scripts can read the app theme's colors with `theme()` (background, text, accent, the playing song's color and the rest), to match the look you picked.
+- Visualizer scripts can make seeded random generators with `random(seed)`, which give the same numbers for the same seed. In a recording `math.random` is seeded from the song as well, so recording the same song twice gives the same video.
+
+### Fixed
+- Recordings on Linux and macOS are named with the local time instead of UTC.
 
 ## 2.7.0 (2026-11-07)
 
