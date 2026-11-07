@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use eframe::egui;
 
 use super::{
-    is_midi_path, song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS,
+    song_info_widgets, App, DraggedSoundfont, PREVIOUS_RESTARTS_AFTER_SECS,
     SONG_EXTENSIONS,
 };
 use crate::audio::AudioCommand;
@@ -398,7 +398,7 @@ impl App {
             .copied()
             .filter(|&i| {
                 soundfont.is_none()
-                    || self.playlists.lists.get(list).and_then(|l| l.playlist.entries.get(i)).is_some_and(|e| is_midi_path(&e.path))
+                    || self.playlists.lists.get(list).and_then(|l| l.playlist.entries.get(i)).is_some_and(|e| crate::midi_notes::is_midi(&e.path))
             })
             .collect();
         if midi.is_empty() && soundfont.is_some() {
@@ -419,7 +419,7 @@ impl App {
         else {
             return;
         };
-        if soundfont.is_some() && !is_midi_path(&entry.path) {
+        if soundfont.is_some() && !crate::midi_notes::is_midi(&entry.path) {
             self.status = "Soundfont overrides only apply to MIDI files.".to_string();
             return;
         }
@@ -834,7 +834,7 @@ impl App {
                 if rows.len() == 1 && !entry.missing && ui.button("Song info").clicked() {
                     *info_open = Some(vec![entry.path.clone()]);
                 }
-                if !smart && (is_midi_path(&entry.path) || rows.len() > 1) {
+                if !smart && (crate::midi_notes::is_midi(&entry.path) || rows.len() > 1) {
                     if ui
                         .add_enabled(selected_sf, egui::Button::new(format!("Use current soundfont{count}")))
                         .clicked()
@@ -902,7 +902,7 @@ impl App {
                 });
             }
 
-            if !fixed && let Some(drop) = row_drop_ui(ui, &row.response, list, idx, is_midi_path(&entry.path)) {
+            if !fixed && let Some(drop) = row_drop_ui(ui, &row.response, list, idx, crate::midi_notes::is_midi(&entry.path)) {
                 row_drop = Some(drop);
             }
         });

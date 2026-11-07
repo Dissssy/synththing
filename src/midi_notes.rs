@@ -12,6 +12,15 @@
 //! `beat()`, `bar()`, `tempo()` and friends; and each channel's program
 //! changes and track name, for `channel_program()` and `channel_name()`.
 
+/// The extensions of Standard MIDI Files: `.kar` is one with karaoke
+/// lyrics in its text events.
+pub const MIDI_EXTENSIONS: &[&str] = &["mid", "midi", "kar"];
+
+/// Whether `path` names a MIDI file, by its extension.
+pub fn is_midi(path: &std::path::Path) -> bool {
+    path.extension().and_then(|e| e.to_str()).is_some_and(|ext| MIDI_EXTENSIONS.iter().any(|m| ext.eq_ignore_ascii_case(m)))
+}
+
 /// General MIDI's instrument names, by program number (0 to 127).
 pub const GM_PROGRAM_NAMES: [&str; 128] = [
     "Acoustic Grand Piano", "Bright Acoustic Piano", "Electric Grand Piano", "Honky-tonk Piano",
@@ -86,6 +95,11 @@ pub struct NoteList {
     /// The name of the track each channel's first note is in (empty when
     /// that track has none, or the channel has no notes).
     channel_names: [String; 16],
+    /// The words sung, syllable by syllable, with when each starts (song
+    /// seconds): the file's lyric events, else a karaoke (.kar) file's
+    /// text events. As the file has them: a syllable can start with `/`
+    /// or `\\` (.kar's new line and new verse) or hold a line break.
+    lyrics: Vec<(f64, String)>,
 }
 
 /// Facts about a MIDI file, shown in the song info view.
@@ -226,6 +240,12 @@ impl NoteList {
             .filter(move |(_, n)| n.stop > t0 || (n.start >= t0 && n.start < t1))
     }
 
+    /// The words sung, syllable by syllable (see [`NoteList::lyrics`]'s
+    /// field).
+    pub fn lyrics(&self) -> &[(f64, String)] {
+        &self.lyrics
+    }
+
     /// Read the notes out of a Standard MIDI File.
     pub fn from_smf(bytes: &[u8]) -> Result<Self, String> {
         let mut r = Reader { bytes, pos: 0 };
@@ -268,6 +288,7 @@ impl NoteList {
         let mut notes = Vec::new();
         let mut programs = Vec::new();
         let mut end_time = 0.0f64;
+        let (mut lyrics, mut text_events) = (Vec::new(), Vec::new());
         for &(tick, _, event) in &events {
             let time = clock.seconds(tick);
             end_time = end_time.max(time);
@@ -296,6 +317,8 @@ impl NoteList {
                     }
                 }
                 Event::Program { channel, program } => programs.push((time, channel, program)),
+                Event::Lyric(i) => lyrics.push((time, std::mem::take(&mut texts.words[i]))),
+                Event::Text(i) => text_events.push((time, std::mem::take(&mut texts.words[i]))),
                 Event::Other => {}
             }
         }
@@ -323,7 +346,13 @@ impl NoteList {
         let channel_names = texts
             .channel_tracks
             .map(|track| track.and_then(|t| facts.track_names.get(t).cloned()).unwrap_or_default());
-        Ok(Self { notes, longest, timing, facts, programs, channel_names })
+        // A .kar file's words are text events, after its "@" headers
+        // ("@KMIDI KARAOKE FILE", "@T" title...). Other files' text events
+        // are notes of all sorts, never sung.
+        if lyrics.is_empty() && text_events.iter().any(|(_, t)| t.starts_with("@K")) {
+            lyrics = text_events.into_iter().filter(|(_, t)| !t.starts_with('@')).collect();
+        }
+        Ok(Self { notes, longest, timing, facts, programs, channel_names, lyrics })
     }
 }
 
@@ -336,6 +365,10 @@ enum Event {
     /// Numerator and denominator (already as a number, e.g. 8 for x/8).
     TimeSignature(u8, u8),
     Program { channel: u8, program: u8 },
+    /// A lyric (meta event 05) or text event (01): its text in
+    /// `TrackTexts::words`.
+    Lyric(usize),
+    Text(usize),
     Other,
 }
 
@@ -346,6 +379,18 @@ struct TrackTexts {
     copyright: Option<String>,
     /// The track (index into `names`) each channel's first note is in.
     channel_tracks: [Option<usize>; 16],
+    /// Lyric and text events' texts (`Event::Lyric`, `Event::Text`).
+    words: Vec<String>,
+}
+
+/// A lyric or text event's text: as [`meta_text`] reads it, but with its
+/// spaces and line breaks, which separate the words.
+fn syllable_text(bytes: &[u8]) -> String {
+    let text = match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => bytes.iter().map(|&b| char::from(b)).collect(),
+    };
+    text.replace('\0', "")
 }
 
 /// Meta event text, which has no declared encoding: UTF-8 when it is,
@@ -391,6 +436,11 @@ fn read_track(
                             *name = text;
                         }
                         Event::Other
+                    }
+                    (0x01 | 0x05, text) => {
+                        texts.words.push(syllable_text(text));
+                        let i = texts.words.len() - 1;
+                        if kind == 0x05 { Event::Lyric(i) } else { Event::Text(i) }
                     }
                     (0x58, [numerator, power, ..]) if *power < 8 => Event::TimeSignature(*numerator, 1 << power),
                     (0x2F, _) => {
@@ -671,6 +721,24 @@ mod tests {
         assert_eq!(list.note_count(), 4);
         assert_eq!(list.channels(), [0, 1, 2]);
         assert!((facts.end_time - 1.75).abs() < 1e-9);
+    }
+
+    /// Lyric events are the words, with their times; a .kar file's text
+    /// events are, after its "@" headers; other text events aren't.
+    #[test]
+    fn reads_lyrics_and_karaoke_text() {
+        let file = |events: &[(u32, &[u8])]| {
+            let mut bytes = b"MThd".to_vec();
+            bytes.extend(6u32.to_be_bytes());
+            bytes.extend([0, 0, 0, 1, 0x01, 0xE0]); // format 0, 480 per quarter (120 bpm: 960 ticks a second)
+            bytes.extend(track(events));
+            NoteList::from_smf(&bytes).unwrap()
+        };
+        let lyrics = file(&[(0, &[0xFF, 0x05, 0x03, b'H', b'i', b' ']), (960, &[0xFF, 0x05, 0x03, b'y', b'o', b'u']), (0, &[0xFF, 0x01, 0x01, b'x'])]);
+        assert_eq!(lyrics.lyrics(), [(0.0, "Hi ".to_string()), (1.0, "you".to_string())]);
+        let kar = file(&[(0, &[0xFF, 0x01, 0x03, b'@', b'K', b'X']), (0, &[0xFF, 0x01, 0x03, b'@', b'T', b'Y']), (480, &[0xFF, 0x01, 0x03, b'/', b'L', b'a'])]);
+        assert_eq!(kar.lyrics(), [(0.5, "/La".to_string())]);
+        assert!(file(&[(0, &[0xFF, 0x01, 0x04, b'n', b'o', b't', b'e'])]).lyrics().is_empty());
     }
 
     /// Program changes are kept per channel with their times; a channel

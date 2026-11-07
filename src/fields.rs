@@ -82,6 +82,9 @@ pub enum Field {
     SkipShuffle,
     /// It starts again where it was left (`song_store::Song::position`).
     RememberPosition,
+    /// How much later its lyrics' lines come (seconds; edits only):
+    /// negative brings them sooner.
+    LyricsOffset,
     /// The ID of the release (album) it's on at MusicBrainz, as its tags
     /// say.
     #[serde(rename = "musicbrainz_release")]
@@ -162,6 +165,10 @@ const fn def(field: Field, key: &'static str, label: &'static str, kind: Kind, s
     Def { field, key, label, kind, synced, width, groups, list, editable }
 }
 
+/// The furthest a song's lyrics can be moved (`Field::LyricsOffset`), in
+/// seconds either way.
+pub const LYRICS_OFFSET: f64 = 30.0;
+
 /// A genre list's separators: "Electronic, Rock; Jazz".
 const GENRE_LIST: &[char] = &[',', ';', '\0'];
 /// A list of names' separators: "Perry Porter; Nujabes".
@@ -203,6 +210,7 @@ pub const FIELDS: &[Def] = &[
     def(Field::VolumeAdjust, "volume_adjust", "Volume adjust (%)", Kind::Number, true, 0.0, false, &[], true),
     def(Field::SkipShuffle, "skip_shuffle", "Skip when shuffling", Kind::Flag, true, 0.0, false, &[], true),
     def(Field::RememberPosition, "remember_position", "Remember position", Kind::Flag, true, 0.0, false, &[], true),
+    def(Field::LyricsOffset, "lyrics_offset", "Lyrics offset (s)", Kind::Number, true, 0.0, false, &[], true),
     def(Field::MusicBrainzRelease, "musicbrainz_release", "MusicBrainz release", Kind::Text, true, 0.0, false, &[], false),
     def(Field::AddedBy, "added_by", "Added by", Kind::Text, true, 120.0, true, &[], false),
     def(Field::Matched, "matched", "Matched at MusicBrainz", Kind::Flag, true, 0.0, false, &[], false),
@@ -277,7 +285,7 @@ impl Field {
     pub fn section(self) -> Section {
         match self {
             Field::SortTitle | Field::SortAlbum | Field::SortArtist | Field::SortAlbumArtist | Field::SortComposer => Section::Sorting,
-            Field::StartTime | Field::StopTime | Field::VolumeAdjust | Field::SkipShuffle | Field::RememberPosition => Section::Options,
+            Field::StartTime | Field::StopTime | Field::VolumeAdjust | Field::SkipShuffle | Field::RememberPosition | Field::LyricsOffset => Section::Options,
             _ => Section::Details,
         }
     }
@@ -409,6 +417,7 @@ impl<'a> Facts<'a> {
             return match field {
                 Field::StartTime | Field::StopTime => seconds(edit),
                 Field::VolumeAdjust => edit.trim().trim_end_matches('%').trim().parse::<f64>().ok().map(|n| n.clamp(-100.0, 100.0)),
+                Field::LyricsOffset => edit.trim().trim_end_matches('s').trim().parse::<f64>().ok().filter(|n| n.is_finite()).map(|n| n.clamp(-LYRICS_OFFSET, LYRICS_OFFSET)),
                 _ => crate::song_info::leading_number(edit).map(f64::from),
             };
         }
@@ -456,7 +465,7 @@ impl<'a> Facts<'a> {
 
     /// Whether it's a MIDI file.
     pub fn is_midi(&self) -> bool {
-        Path::new(self.file_name).extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"))
+        crate::midi_notes::is_midi(Path::new(self.file_name))
     }
 
     pub fn has_tag(&self, id: &str) -> bool {
@@ -509,6 +518,7 @@ impl<'a> Facts<'a> {
                 match field {
                     Field::Length | Field::StartTime | Field::StopTime => format_length(n),
                     Field::VolumeAdjust => format!("{n:+.0}"),
+                    Field::LyricsOffset => format!("{n:+.2}"),
                     Field::Bpm if (n - n.round()).abs() < 0.05 => format!("{n:.0}"),
                     Field::Bpm => format!("{n:.1}"),
                     Field::Notes => thousands(n as usize),

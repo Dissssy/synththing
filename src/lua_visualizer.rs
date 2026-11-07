@@ -75,6 +75,7 @@
 //!   recording time in a recording (`script_clock.rs`).
 //! * `theme()`: the app theme's colors (`script_theme.rs`).
 //! * `song_details()`: what the library knows of the song (`script_song.rs`).
+//! * `lyrics()`: the song's lyrics (`script_lyrics.rs`).
 //! * `up_next()`: the queue, then what plays after it (`script_queue.rs`).
 //! * `noise()`, `ease()` and `random(seed)`: smooth noise, easing curves and
 //!   seeded generators; `math.random` is seeded from the song in a
@@ -1940,6 +1941,8 @@ pub struct LuaVisualizer {
     /// What the library knows of the song (`song_details()`); outlives
     /// recompiles.
     song_details: Rc<RefCell<Option<crate::script_song::SongDetails>>>,
+    /// The song's lyrics (`lyrics()`); outlive a reload too.
+    lyrics: Rc<RefCell<crate::script_lyrics::SongLyrics>>,
     /// What plays next (`up_next()`); outlives recompiles.
     up_next: Rc<RefCell<Vec<crate::script_queue::UpNextSong>>>,
     /// Whether the script reads its saved data (store, settings, controls)
@@ -1979,6 +1982,7 @@ impl LuaVisualizer {
             saved_data: true,
             theme: Rc::new(RefCell::new(crate::theme::default_theme())),
             song_details: Rc::default(),
+            lyrics: Rc::default(),
             up_next: Rc::default(),
         };
         visualizer.set_source(source);
@@ -2106,6 +2110,11 @@ impl LuaVisualizer {
     /// What the library knows of the playing song, for `song_details()`.
     pub fn set_song_details(&mut self, details: Option<crate::script_song::SongDetails>) {
         *self.song_details.borrow_mut() = details;
+    }
+
+    /// The song's lyrics, for `lyrics()`.
+    pub fn set_lyrics(&mut self, lyrics: crate::script_lyrics::ScriptLyrics) {
+        self.lyrics.borrow_mut().set(lyrics);
     }
 
     /// What plays after the song playing, for `up_next()`.
@@ -2253,6 +2262,7 @@ impl LuaVisualizer {
             &self.app_log,
             &self.theme,
             &self.song_details,
+            &self.lyrics,
             &self.up_next,
         ) {
             Ok(compiled) => {
@@ -2323,6 +2333,7 @@ impl LuaVisualizer {
             &self.app_log,
             &self.theme,
             &self.song_details,
+            &self.lyrics,
             &self.up_next,
         ) {
             Ok(compiled) => {
@@ -2502,6 +2513,7 @@ fn compile(
     app_log: &Rc<Cell<bool>>,
     theme: &Rc<RefCell<crate::theme::Theme>>,
     song_details: &Rc<RefCell<Option<crate::script_song::SongDetails>>>,
+    lyrics: &Rc<RefCell<crate::script_lyrics::SongLyrics>>,
     up_next: &Rc<RefCell<Vec<crate::script_queue::UpNextSong>>>,
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
@@ -2668,6 +2680,7 @@ fn compile(
     crate::script_math::register(&lua).map_err(|e| e.to_string())?;
     crate::script_theme::register(&lua, theme).map_err(|e| e.to_string())?;
     crate::script_song::register(&lua, song_details).map_err(|e| e.to_string())?;
+    crate::script_lyrics::register(&lua, lyrics).map_err(|e| e.to_string())?;
     crate::script_queue::register(&lua, up_next).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua

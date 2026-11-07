@@ -27,7 +27,8 @@ use eframe::egui::TextureHandle;
 
 use eframe::egui;
 
-use super::{is_midi_path, App};
+use super::App;
+use crate::midi_notes::is_midi as is_midi_path;
 #[cfg(not(target_os = "android"))]
 use super::file_manager;
 use crate::config::nice_name;
@@ -297,7 +298,7 @@ impl App {
         let song_loaded = |app: &Self, song: &Path| {
             app.current_song.as_deref() == Some(song)
                 && (view.has_midi || view.has_audio_file)
-                && (!is_midi_path(song) || draft.soundfont.is_none() || app.loaded_sf == draft.soundfont)
+                && (!crate::midi_notes::is_midi(song) || draft.soundfont.is_none() || app.loaded_sf == draft.soundfont)
         };
         let list = self.now_playing.as_ref().map(|np| np.list).or(self.viewed_playlist);
         let list = list.filter(|&l| self.playlists.lists.get(l).is_some_and(|l| !l.playlist.entries.is_empty()));

@@ -215,6 +215,17 @@ impl App {
                          comes first. Your hub does this, or this computer while you have none.",
                     )
                     .changed();
+                changed |= ui
+                    .checkbox(&mut self.config.lyrics_lookup, "Fetch lyrics from LRCLIB")
+                    .on_hover_text(
+                        "Songs with no lyrics of their own (no .lrc file, none in their tags) get LRCLIB's, timed where it \
+                         has them. Song titles, artists, albums and lengths are sent to lrclib.net. The device that looks \
+                         albums up finds them, and which lyrics each song has syncs to your other devices.",
+                    )
+                    .changed();
+                if self.config.lyrics_lookup && self.looks_up_lyrics() {
+                    self.lyrics_lookup_status_ui(ui);
+                }
             });
         }
         if changed && let Err(e) = self.config.save() {
@@ -364,7 +375,7 @@ impl App {
                 let online = song.online.as_ref().filter(|o| o.release.as_deref() == Some(release))?;
                 let mut rejected = online.rejected.clone();
                 rejected.push(release.to_string());
-                Some((key.to_string(), Some(Online { rejected, by_user: true, at, art: online.art.clone(), ..Online::default() })))
+                Some((key.to_string(), Some(Online { rejected, by_user: true, at, art: online.art.clone(), lyrics: online.lyrics, ..Online::default() })))
             })
             .collect();
         log::info!("{} songs aren't on release {release}", changes.len());

@@ -713,7 +713,7 @@ impl App {
 
     /// The soundfont the MIDI song playing plays with.
     fn api_soundfont(&self) -> Option<PlaylistRef> {
-        self.current_song.as_deref().filter(|path| super::is_midi_path(path))?;
+        self.current_song.as_deref().filter(|path| crate::midi_notes::is_midi(path))?;
         let path = self.loaded_sf.as_deref()?;
         Some(PlaylistRef { id: api::file_id(path), name: crate::config::nice_name(path) })
     }

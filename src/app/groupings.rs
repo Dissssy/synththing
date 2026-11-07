@@ -23,7 +23,7 @@ use std::sync::Arc;
 use eframe::egui;
 
 use super::wishlist::AlbumAsk;
-use super::{icon_button, is_midi_path, naming, toast, App, PrefTab};
+use super::{icon_button, naming, toast, App, PrefTab};
 use crate::album_art::{AlbumArt, Source as AlbumArtSource};
 use crate::fields::{self, Facts, Field};
 use crate::select_list;
@@ -634,7 +634,7 @@ impl App {
         if let Some(wish) = wished(group).and_then(|id| self.wishlist.list.wishes.get(id)) {
             return super::wishlist::source(wish);
         }
-        let file = group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).find(|p| !is_midi_path(p));
+        let file = group.songs.iter().filter(|key| self.songs.has(key)).map(|key| self.songs.path(key)).find(|p| !crate::midi_notes::is_midi(p));
         let release = group
             .songs
             .iter()

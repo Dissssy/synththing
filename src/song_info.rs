@@ -349,10 +349,7 @@ fn worker(queue: &Queue, results: &Sender<Read>) {
 /// The song at `path`'s info, or why it can't be read (then it likely
 /// can't be played either).
 pub fn read(path: &Path) -> Result<SongInfo, String> {
-    let is_midi = path
-        .extension()
-        .and_then(|e| e.to_str())
-        .is_some_and(|e| e.eq_ignore_ascii_case("mid") || e.eq_ignore_ascii_case("midi"));
+    let is_midi = crate::midi_notes::is_midi(path);
     let mut info = if is_midi { read_midi(path) } else { read_audio(path) }?;
     info.meta.size = std::fs::metadata(path).map_or(0, |m| m.len());
     info.meta.version = crate::song_store::META_VERSION;

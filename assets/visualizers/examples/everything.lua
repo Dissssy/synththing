@@ -10,6 +10,8 @@
 --   Theme     every theme() color; switch themes and it follows at once
 --   Song      song_details() for the playing song (star it, edit it, play
 --             it to the end: it updates)
+--   Lyrics    lyrics(): the line being sung (by playback().position) with
+--             the ones around it, its sung words marked; nil without
 --   Up next   up_next(): queue songs (marked Q), then what follows
 --   Image     image_load(): the first PNG or JPEG in the assets folder (the
 --             folder button above opens it), at its own size and at 48 px;
@@ -162,6 +164,31 @@ local function song_panel(c, bottom)
     end
 end
 
+local function lyrics_panel(c)
+    c:title("Lyrics")
+    local l = lyrics()
+    if not l then return c:line("nil (no lyrics for this song)", c.colors.weak) end
+    c:line(string.format("%s, %d lines, %s", l.source, #l.lines, l.timed and "timed" or "untimed"), c.colors.weak)
+    local position = playback().position
+    local current = 0
+    for i, line in ipairs(l.lines) do
+        if line.start and line.start <= position then current = i end
+    end
+    for i = math.max(1, current - 1), math.min(#l.lines, math.max(current, 1) + 1) do
+        local line = l.lines[i]
+        local start = line.start and string.format("%.2f ", line.start) or ""
+        if i == current and #line.words > 0 then
+            local sung = ""
+            for _, w in ipairs(line.words) do
+                if w.start <= position then sung = sung .. w.text end
+            end
+            c:line(start .. "[" .. sung .. "]" .. line.text:sub(#sung + 1), c.colors.accent)
+        else
+            c:line(start .. line.text, i == current and c.colors.accent or nil)
+        end
+    end
+end
+
 local function up_next_panel(c, bottom)
     c:title("Up next")
     local songs = up_next()
@@ -191,6 +218,7 @@ function render(width, height)
     theme_panel(pick(2), th)
     image_panel(pick(2))
     local c3 = pick(3)
-    song_panel(c3, c3.y + (height - c3.y) * 0.55)
+    song_panel(c3, c3.y + (height - c3.y) * 0.45)
+    lyrics_panel(c3)
     up_next_panel(c3, height - FONT_HEIGHT)
 end

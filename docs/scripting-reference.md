@@ -181,7 +181,7 @@ blit(pixels, width, height, palette, [x], [y], [w], [h])   -- a palette-indexed 
 
 <!-- api: theme -->
 ```lua
-theme() -> theme   -- the app theme's colors, to match the look the user picked (the default theme in previews) (since next)
+theme() -> theme   -- the app theme's colors, to match the look the user picked (the default theme in previews) (since 2.8.0)
 ```
 <!-- /api -->
 
@@ -475,10 +475,11 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 
 ## Playback & timing
 
-<!-- api: playback song_details set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
+<!-- api: playback song_details lyrics set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
 ```lua
 playback() -> playback      -- what's playing and where, times in song seconds (since 0.1.1)
-song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since next)
+song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since 2.8.0)
+lyrics() -> lyrics          -- the playing song's lyrics, as the Lyrics panel shows them, or nil for a song without; the same table each call until they change, so don't change it (since 2.8.0)
 set_paused(paused)          -- pause or resume playback (applied after this frame) (since 0.1.4)
 seek(seconds)               -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
 set_speed(speed)            -- playback speed (applied after this frame) (since 0.2.0)
@@ -559,6 +560,17 @@ local d = song_details()
 if d and d.starred then text(4, 4, "* " .. (d.title or ""), theme().star) end
 ```
 
+`lyrics()` is the playing song's lyrics, as the Lyrics panel shows them (from an `.lrc` file beside the song, a MIDI file's lyrics, its tags or LRCLIB; `source` says which), or nil for a song without. Each of its `lines` has its `text` and, in timed lyrics, its `start`: song seconds with the song's lyrics offset already in, so they compare with `playback().position` as they are. Where the source times each word (enhanced LRC, a MIDI file's syllables), the line's `words` have their own `start` and `text`, and together make up the line. It's the same table each call until the lyrics change, so calling it every frame costs nothing, but don't change it.
+
+```lua
+local l, at = lyrics(), playback().position
+local sung
+for _, line in ipairs(l and l.timed and l.lines or {}) do
+    if line.start <= at then sung = line.text end
+end
+if sung then text(4, 4, sung, theme().text) end
+```
+
 `script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto`, `transparent` and `assets`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, the clear color for `transparent`, and Assets for `assets`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
 
 `TIME` and `FRAME` start over when the script is reloaded or restarted. `TIME` keeps counting while the visualizer isn't being drawn, unlike the sum of `DT`.
@@ -573,10 +585,10 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 
 <!-- api: noise ease random -->
 ```lua
-noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since next)
-ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since next)
+noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since 2.8.0)
+ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since 2.8.0)
                               -- curve: "linear", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce; t: 0 to 1, clamped
-random(seed) -> generator     -- a random number generator of its own, apart from math.random (since next)
+random(seed) -> generator     -- a random number generator of its own, apart from math.random (since 2.8.0)
                               -- seed: the same seed always gives the same numbers
 ```
 <!-- /api -->
@@ -605,10 +617,10 @@ In a recording (and so in previews) `math.random` itself is seeded from the song
 
 <!-- api: now unix_time format_time -->
 ```lua
-now([utc]) -> date                    -- today's date and the time of day; recording time in a recording (since next)
+now([utc]) -> date                    -- today's date and the time of day; recording time in a recording (since 2.8.0)
                                       -- utc: true for UTC, local time if not given
-unix_time() -> seconds                -- seconds since 1970 (UTC), fractional; recording time in a recording (since next)
-format_time(format, [time]) -> text   -- a date as text (since next)
+unix_time() -> seconds                -- seconds since 1970 (UTC), fractional; recording time in a recording (since 2.8.0)
+format_time(format, [time]) -> text   -- a date as text (since 2.8.0)
                                       -- format: strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p...; time: a unix_time() or now() result, now if not given
 ```
 <!-- /api -->
@@ -677,7 +689,7 @@ Render and `run-script --video` work the same way: the frames a script spends pr
 <!-- api: playlist up_next play_track next_track previous_track set_loop set_shuffle -->
 ```lua
 playlist() -> playlist      -- the current playlist, read-only, or nil (since 0.2.0)
-up_next([count]) -> songs   -- what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it (since next)
+up_next([count]) -> songs   -- what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it (since 2.8.0)
                             -- count: at most this many, all if not given
 play_track(index)           -- play the current playlist's index-th song (since 0.2.0)
 next_track()                -- the Next button (since 0.2.0)
@@ -1285,6 +1297,20 @@ UpNextSong            -- a song coming up (up_next())
     album?: string
     length?: number   -- seconds
     queued: boolean   -- in the queue, rather than what plays after it
+
+Lyrics                                      -- a song's lyrics (lyrics()); times are song seconds with the song's lyrics offset in, to compare with playback().position
+    source: "file"|"midi"|"tags"|"lrclib"   -- an .lrc file beside the song, a MIDI file's lyrics, its tags, or LRCLIB
+    timed: boolean                          -- the lines have times; without, they're plain text
+    lines: LyricsLine[]
+
+LyricsLine                -- a line of lyrics (lyrics().lines)
+    text: string
+    start?: number        -- when it's sung; nil in untimed lyrics
+    words: LyricsWord[]   -- its words (or syllables) with their times, where the source times them (enhanced LRC, MIDI); else empty
+
+LyricsWord          -- a word or syllable of a line (LyricsLine.words); together they make up its text
+    start: number
+    text: string    -- with any space after it
 
 SongDetails                        -- what the library knows of a song (song_details()), with the user's edits; a field it doesn't know is nil. Keys are the ones song name patterns use
     title?: string

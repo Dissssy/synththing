@@ -189,7 +189,10 @@ fn import_songs(files: Vec<(PathBuf, Option<PathBuf>)>, extensions: &[&str]) -> 
             continue;
         }
         match song_store::copy_in(&file, &dir) {
-            Ok(stored) => imported.songs.push(ImportedSong { stored, soundfont }),
+            Ok(stored) => {
+                crate::lyrics::import(&file, &stored.key);
+                imported.songs.push(ImportedSong { stored, soundfont });
+            }
             Err(e) => imported.failed.push(format!("{e:#}")),
         }
     }

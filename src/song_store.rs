@@ -162,6 +162,16 @@ pub struct Online {
     /// they were filled, once it's filled them (`SongStore::fill`).
     #[serde(rename = "f", skip_serializing_if = "Option::is_none")]
     pub filled: Option<Vec<Field>>,
+    /// Its lyrics at LRCLIB (`lookup::lrclib`): the record's id.
+    #[serde(rename = "l", skip_serializing_if = "Option::is_none")]
+    pub lyrics: Option<i64>,
+}
+
+impl Online {
+    /// Nothing left to keep: no record at all.
+    fn is_empty(&self) -> bool {
+        self.release.is_none() && self.rejected.is_empty() && !self.by_user && self.art.is_none() && self.lyrics.is_none()
+    }
 }
 
 /// An album's art, as chosen.
@@ -642,6 +652,7 @@ impl SongStore {
                 return;
             }
         }
+        crate::lyrics::forget(key);
         self.present.remove(key);
         Arc::make_mut(&mut self.songs).remove(key);
         if self.blocked.remove(key) {
@@ -869,12 +880,20 @@ impl SongStore {
             .filter_map(|key| {
                 let mut online = self.songs.get(key)?.online.clone().unwrap_or(Online { at, ..Online::default() });
                 online.art = art.clone();
-                // (Nothing left to keep: no record at all.)
-                let empty = online.release.is_none() && online.rejected.is_empty() && !online.by_user && online.art.is_none();
-                Some((key.clone(), (!empty).then_some(online)))
+                Some((key.clone(), (!online.is_empty()).then_some(online)))
             })
             .collect();
         self.set_online(changes);
+    }
+
+    /// Note the song `key`'s lyrics at LRCLIB (`None`: none); saved if
+    /// that's news.
+    pub fn set_lyrics(&mut self, key: &str, lyrics: Option<i64>) {
+        let Some(song) = self.songs.get(key) else { return };
+        let mut online = song.online.clone().unwrap_or(Online { at: crate::settings_sync::now(), ..Online::default() });
+        online.lyrics = lyrics;
+        let online = (!online.is_empty()).then_some(online);
+        self.set_online(vec![(key.to_string(), online)]);
     }
 
     /// Note how loud the song `key` measured; saved if it changed.
@@ -1341,6 +1360,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
         let stored = if file.starts_with(dir) { move_in(file, dir) } else { copy_in(file, dir) };
         match stored {
             Ok(stored) => {
+                crate::lyrics::import(file, &stored.key);
                 keys.insert(file.to_path_buf(), stored.key.clone());
                 done.moved.push((file.to_path_buf(), path_of(dir, &stored.key)));
                 let key = stored.key.clone();

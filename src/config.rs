@@ -163,6 +163,10 @@ pub struct Config {
     /// artists' pictures from Wikidata (`art_fill`), with `online_lookup`.
     #[serde(default)]
     pub fill_art: bool,
+    /// Preference: look songs without lyrics of their own up at LRCLIB
+    /// (`lookup::lrclib`), with `online_lookup`.
+    #[serde(default)]
+    pub lyrics_lookup: bool,
     /// Preference: copy visualizer scripts' log() messages to the app's log.
     #[serde(default)]
     pub script_log_to_app: bool,
@@ -262,6 +266,11 @@ pub struct Config {
     /// `DEFAULT_COMING_UP`).
     #[serde(default)]
     pub coming_up: Option<usize>,
+    /// The Lyrics panel's line mode: it shows this many lines (1 to
+    /// `lyrics::MAX_LINES`), the one being sung in the middle, and in the
+    /// dock is made exactly that tall (`None`: free size, all the lyrics).
+    #[serde(default)]
+    pub lyrics_lines: Option<u8>,
     /// Preference: when a song counts as played or skipped (`play_stats`).
     #[serde(default)]
     pub play_counts: crate::play_stats::Cutoffs,
