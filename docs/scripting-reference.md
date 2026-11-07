@@ -181,7 +181,7 @@ blit(pixels, width, height, palette, [x], [y], [w], [h])   -- a palette-indexed 
 
 <!-- api: theme -->
 ```lua
-theme() -> theme   -- the app theme's colors, to match the look the user picked (the default theme in previews) (since next)
+theme() -> theme   -- the app theme's colors, to match the look the user picked (the default theme in previews) (since 2.8.0)
 ```
 <!-- /api -->
 
@@ -478,8 +478,8 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 <!-- api: playback song_details lyrics set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
 ```lua
 playback() -> playback      -- what's playing and where, times in song seconds (since 0.1.1)
-song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since next)
-lyrics() -> lyrics          -- the playing song's lyrics, as the Lyrics panel shows them, or nil for a song without; the same table each call until they change, so don't change it (since next)
+song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since 2.8.0)
+lyrics() -> lyrics          -- the playing song's lyrics, as the Lyrics panel shows them, or nil for a song without; the same table each call until they change, so don't change it (since 2.8.0)
 set_paused(paused)          -- pause or resume playback (applied after this frame) (since 0.1.4)
 seek(seconds)               -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
 set_speed(speed)            -- playback speed (applied after this frame) (since 0.2.0)
@@ -585,10 +585,10 @@ Check `playback().paused` before writing into a scrolling history buffer, otherw
 
 <!-- api: noise ease random -->
 ```lua
-noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since next)
-ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since next)
+noise(x, [y], [z]) -> value   -- smooth simplex noise in 1, 2 or 3 dimensions; the same inputs always give the same value (since 2.8.0)
+ease(curve, t) -> value       -- t along an easing curve (back and elastic overshoot past 0 and 1) (since 2.8.0)
                               -- curve: "linear", or in_, out_ or in_out_ then sine, quad, cubic, quart, quint, expo, circ, back, elastic or bounce; t: 0 to 1, clamped
-random(seed) -> generator     -- a random number generator of its own, apart from math.random (since next)
+random(seed) -> generator     -- a random number generator of its own, apart from math.random (since 2.8.0)
                               -- seed: the same seed always gives the same numbers
 ```
 <!-- /api -->
@@ -617,10 +617,10 @@ In a recording (and so in previews) `math.random` itself is seeded from the song
 
 <!-- api: now unix_time format_time -->
 ```lua
-now([utc]) -> date                    -- today's date and the time of day; recording time in a recording (since next)
+now([utc]) -> date                    -- today's date and the time of day; recording time in a recording (since 2.8.0)
                                       -- utc: true for UTC, local time if not given
-unix_time() -> seconds                -- seconds since 1970 (UTC), fractional; recording time in a recording (since next)
-format_time(format, [time]) -> text   -- a date as text (since next)
+unix_time() -> seconds                -- seconds since 1970 (UTC), fractional; recording time in a recording (since 2.8.0)
+format_time(format, [time]) -> text   -- a date as text (since 2.8.0)
                                       -- format: strftime-style: %Y-%m-%d %H:%M:%S, %A, %B, %I %p...; time: a unix_time() or now() result, now if not given
 ```
 <!-- /api -->
@@ -689,7 +689,7 @@ Render and `run-script --video` work the same way: the frames a script spends pr
 <!-- api: playlist up_next play_track next_track previous_track set_loop set_shuffle -->
 ```lua
 playlist() -> playlist      -- the current playlist, read-only, or nil (since 0.2.0)
-up_next([count]) -> songs   -- what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it (since next)
+up_next([count]) -> songs   -- what plays after the song playing: the queue, then what the playlist, album or Autoplay plays after it (since 2.8.0)
                             -- count: at most this many, all if not given
 play_track(index)           -- play the current playlist's index-th song (since 0.2.0)
 next_track()                -- the Next button (since 0.2.0)
