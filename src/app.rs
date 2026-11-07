@@ -1136,7 +1136,7 @@ impl App {
     fn playing_repaint(&self) -> Duration {
         let default = Duration::from_secs_f64(1.0 / config::DEFAULT_PLAYING_FPS as f64);
         #[cfg(windows)]
-        let mini_player = self.tray_panel.is_open();
+        let mini_player = self.mini.is_open();
         #[cfg(not(windows))]
         let mini_player = false;
         if cfg!(target_os = "android") || ((self.hidden || self.minimized) && !mini_player) {
