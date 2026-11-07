@@ -78,7 +78,7 @@ impl App {
     /// The songs picked to play after the one playing, in what it's
     /// playing from (the list with Autoplay, an album, or a playlist), after
     /// the queue.
-    fn planned(&self) -> Vec<PathBuf> {
+    pub(super) fn planned(&self) -> Vec<PathBuf> {
         if let Some(playing) = &self.listed {
             return playing.upcoming.iter().map(|(at, _)| at.path.clone()).collect();
         }

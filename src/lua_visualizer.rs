@@ -71,6 +71,14 @@
 //!   Local API programs (`shared_data.rs`).
 //! * `FRAME` (frames since the script started) and `TIME` (seconds since
 //!   it started, wall clock, uncapped).
+//! * `now()`, `unix_time()`, `format_time()`: the date and time of day,
+//!   recording time in a recording (`script_clock.rs`).
+//! * `theme()`: the app theme's colors (`script_theme.rs`).
+//! * `song_details()`: what the library knows of the song (`script_song.rs`).
+//! * `up_next()`: the queue, then what plays after it (`script_queue.rs`).
+//! * `noise()`, `ease()` and `random(seed)`: smooth noise, easing curves and
+//!   seeded generators; `math.random` is seeded from the song in a
+//!   recording, so it renders the same every time (`script_math.rs`).
 //! * Cursor: `set_cursor_visible(visible)` (applies over the visualizer) and
 //!   `set_cursor_locked(locked)` (keeps it on screen, dedicated fullscreen
 //!   only).
@@ -108,6 +116,7 @@ use crate::config::{config_dir, nice_name};
 use crate::engine::{EngineView, NOTE_LOOKAHEAD_SECS};
 use crate::midi_notes::NoteList;
 use crate::pixel_font;
+use crate::script_clock::ScriptClock;
 use crate::spectrum::{self, OnsetDetector, SpectrumAnalyzer};
 use crate::gamepad::{AXIS_NAMES, PadInput};
 use crate::live::{LiveCommand, LiveNote, Sound};
@@ -1843,6 +1852,11 @@ struct Compiled {
     frame: Cell<u64>,
     /// `TIME`: seconds since its first frame, as of the last render.
     time: Cell<f64>,
+    /// What `now()` and friends read: wall time, or recording time.
+    clock: Rc<RefCell<ScriptClock>>,
+    /// Part of a recording as of the last frame: `math.random` is seeded
+    /// from the song when one starts (`script_math::seed_for_recording`).
+    in_recording: Cell<bool>,
     /// What each frame starts from (`set_clear_color`).
     canvas: Canvas,
     /// `translate` / `clip` this frame, and what `push_view` saved.
@@ -1917,6 +1931,13 @@ pub struct LuaVisualizer {
     compiles: u64,
     /// The "copy script logs to the app log" preference.
     app_log: Rc<Cell<bool>>,
+    /// The app's theme (`theme()`); outlives recompiles.
+    theme: Rc<RefCell<crate::theme::Theme>>,
+    /// What the library knows of the song (`song_details()`); outlives
+    /// recompiles.
+    song_details: Rc<RefCell<Option<crate::script_song::SongDetails>>>,
+    /// What plays next (`up_next()`); outlives recompiles.
+    up_next: Rc<RefCell<Vec<crate::script_queue::UpNextSong>>>,
     /// Whether the script reads its saved data (store, settings, controls)
     /// from beside its file; off for previews (`ignore_saved_data`).
     saved_data: bool,
@@ -1952,6 +1973,9 @@ impl LuaVisualizer {
             compiles: 0,
             app_log: Rc::default(),
             saved_data: true,
+            theme: Rc::new(RefCell::new(crate::theme::default_theme())),
+            song_details: Rc::default(),
+            up_next: Rc::default(),
         };
         visualizer.set_source(source);
         visualizer
@@ -2072,6 +2096,21 @@ impl LuaVisualizer {
         let mut song = self.song.borrow_mut();
         song.recording = recording;
         song.take = take;
+    }
+
+    /// What the library knows of the playing song, for `song_details()`.
+    pub fn set_song_details(&mut self, details: Option<crate::script_song::SongDetails>) {
+        *self.song_details.borrow_mut() = details;
+    }
+
+    /// What plays after the song playing, for `up_next()`.
+    pub fn set_up_next(&mut self, songs: Vec<crate::script_queue::UpNextSong>) {
+        *self.up_next.borrow_mut() = songs;
+    }
+
+    /// The app's theme, for `theme()`.
+    pub fn set_theme(&mut self, theme: crate::theme::Theme) {
+        *self.theme.borrow_mut() = theme;
     }
 
     /// Whether the visualizer's pictures are going out through the local
@@ -2207,6 +2246,9 @@ impl LuaVisualizer {
             &self.stop,
             self.watchdog_limit,
             &self.app_log,
+            &self.theme,
+            &self.song_details,
+            &self.up_next,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
@@ -2274,6 +2316,9 @@ impl LuaVisualizer {
             &self.stop,
             self.watchdog_limit,
             &self.app_log,
+            &self.theme,
+            &self.song_details,
+            &self.up_next,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
@@ -2361,6 +2406,15 @@ impl Visualizer for LuaVisualizer {
         compiled.time.set(time);
         let _ = compiled.lua.globals().set("FRAME", compiled.frame.get());
         let _ = compiled.lua.globals().set("TIME", time);
+        {
+            let song = self.song.borrow();
+            compiled.clock.borrow_mut().frame(time, song.recording);
+            let in_recording = song.recording || song.take.is_some();
+            if in_recording && !compiled.in_recording.get() {
+                let _ = crate::script_math::seed_for_recording(&compiled.lua, song.id.as_deref());
+            }
+            compiled.in_recording.set(in_recording);
+        }
 
         let left: Vec<f32> = samples.iter().map(|&(l, _)| l).collect();
         let right: Vec<f32> = samples.iter().map(|&(_, r)| r).collect();
@@ -2441,6 +2495,9 @@ fn compile(
     stop: &Arc<AtomicBool>,
     watchdog_limit: Duration,
     app_log: &Rc<Cell<bool>>,
+    theme: &Rc<RefCell<crate::theme::Theme>>,
+    song_details: &Rc<RefCell<Option<crate::script_song::SongDetails>>>,
+    up_next: &Rc<RefCell<Vec<crate::script_queue::UpNextSong>>>,
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
     // touch the filesystem or spawn processes, even one the user just wrote.
@@ -2601,6 +2658,12 @@ fn compile(
     register_color_helpers(&lua).map_err(|e| e.to_string())?;
     register_live_notes(&lua, notes, playback, note_list, live).map_err(|e| e.to_string())?;
     register_assets(&lua, &assets).map_err(|e| e.to_string())?;
+    let clock = Rc::default();
+    crate::script_clock::register(&lua, &clock).map_err(|e| e.to_string())?;
+    crate::script_math::register(&lua).map_err(|e| e.to_string())?;
+    crate::script_theme::register(&lua, theme).map_err(|e| e.to_string())?;
+    crate::script_song::register(&lua, song_details).map_err(|e| e.to_string())?;
+    crate::script_queue::register(&lua, up_next).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
         .globals()
@@ -2611,6 +2674,16 @@ fn compile(
             _ => None,
         })
         .collect();
+
+    // A recording (or preview) starts every run of the script the same way.
+    let in_recording = {
+        let song = song.borrow();
+        let in_recording = song.recording || song.take.is_some();
+        if in_recording {
+            crate::script_math::seed_for_recording(&lua, song.id.as_deref()).map_err(|e| e.to_string())?;
+        }
+        in_recording
+    };
 
     deadline.set(Some(Instant::now() + watchdog_limit));
     let ran = lua.load(source).set_name("visualizer").exec();
@@ -2643,6 +2716,8 @@ fn compile(
         typing,
         frame: Cell::new(0),
         time: Cell::new(0.0),
+        clock,
+        in_recording: Cell::new(in_recording),
         canvas,
         view,
         host_globals,
