@@ -153,16 +153,6 @@ impl Lyrics {
         self.lines.partition_point(|l| l.at.is_some_and(|at| at <= position)).checked_sub(1)
     }
 
-    /// For lyrics without times, a guess at the line `position` is at:
-    /// the lines spread evenly over the song's `length`.
-    pub fn estimate(&self, position: f64, length: f64) -> Option<usize> {
-        if self.timed || self.lines.is_empty() || length <= 0.0 {
-            return None;
-        }
-        let at = (position / length).clamp(0.0, 1.0) * self.lines.len() as f64;
-        Some((at as usize).min(self.lines.len() - 1))
-    }
-
     /// How far through line `index` `position` is (0 to 1): up to the
     /// next line's start, or the song's `length` after the last.
     pub fn progress(&self, index: usize, position: f64, length: f64) -> f32 {
@@ -336,7 +326,6 @@ mod tests {
         let lines: Vec<_> = lyrics.lines.iter().map(|l| l.text.as_str()).collect();
         assert_eq!(lines, ["First line", "", "Second [not a tag]"]);
         assert_eq!(lyrics.current(5.0), None);
-        assert_eq!((lyrics.estimate(0.0, 30.0), lyrics.estimate(15.0, 30.0), lyrics.estimate(30.0, 30.0)), (Some(0), Some(1), Some(2)));
         assert!(Lyrics::parse("  \n ", Source::Tags).is_none());
     }
 

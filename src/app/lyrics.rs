@@ -86,11 +86,11 @@ impl App {
         // (Until the song sent is the one playing, the view's another's.)
         let offset = self.playing_facts().and_then(|f| f.number(Field::LyricsOffset)).unwrap_or(0.0);
         let position = if view.loads < self.song_loads { 0.0 } else { view.position - offset };
-        // (Lyrics without times: where they are is a guess, shown as one.)
-        let guessed = !lyrics.timed;
-        let current = lyrics.current(position).or_else(|| lyrics.estimate(position, view.length - offset));
-        if let Some(n) = lines {
-            lines_ui(ui, rect, &lyrics, n, line_height, current, guessed, position, view.length - offset);
+        let current = lyrics.current(position);
+        // (Lyrics without times, in line mode too: all of them, to scroll
+        // through by hand.)
+        if let Some(n) = lines.filter(|_| lyrics.timed) {
+            lines_ui(ui, rect, &lyrics, n, line_height, current, position, view.length - offset);
             return size_error;
         }
         let playing = crate::theme::playing_color(ui.ctx());
@@ -109,7 +109,7 @@ impl App {
                         _ => ui.visuals().text_color(),
                     };
                     // (The line being sung: its words sung so far, else all of it.)
-                    let sung = if current == Some(i) && !guessed { line.sung(position).unwrap_or(line.text.len()) } else { 0 };
+                    let sung = if current == Some(i) { line.sung(position).unwrap_or(line.text.len()) } else { 0 };
                     let mut job = sung_job(text, sung, font, playing, color);
                     job.wrap.max_width = ui.available_width();
                     job.halign = egui::Align::Center;
@@ -127,7 +127,7 @@ impl App {
                     if scroll_to == Some(i) {
                         response.scroll_to_me(Some(egui::Align::Center));
                     }
-                    if current == Some(i) && !guessed {
+                    if current == Some(i) {
                         let (room, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), BAR_ROOM), egui::Sense::hover());
                         progress_bar(ui, room.center_top() + egui::vec2(0.0, 1.0), lyrics.progress(i, position, view.length - offset));
                     }
@@ -135,7 +135,7 @@ impl App {
                 ui.add_space(ui.clip_rect().height() / 2.0);
                 ui.weak(lyrics.source.label());
                 if !lyrics.timed {
-                    ui.weak("These lyrics have no times: where the song is in them is a guess");
+                    ui.weak("These lyrics have no times, so they don't follow the song");
                 }
             });
         });
@@ -202,7 +202,7 @@ fn line_height(ui: &egui::Ui) -> f32 {
 /// Line mode: `n` lines, the one being sung in the middle over a bar of
 /// how far through it the song is, centered in `rect`.
 #[allow(clippy::too_many_arguments)]
-fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_height: f32, current: Option<usize>, guessed: bool, position: f64, length: f64) {
+fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_height: f32, current: Option<usize>, position: f64, length: f64) {
     let n = usize::from(n);
     let playing = crate::theme::playing_color(ui.ctx());
     let font = egui::FontId::proportional(text_size(ui));
@@ -217,8 +217,6 @@ fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_he
         let line = usize::try_from(index).ok().and_then(|i| lyrics.lines.get(i));
         let weak = ui.visuals().weak_text_color();
         let (text, sung, color): (std::borrow::Cow<str>, _, _) = match line {
-            // (A guess, marked as one: not lit up like a line being sung.)
-            Some(line) if Some(index as usize) == current && guessed => (format!("≈ {}", line.text).into(), 0, ui.visuals().text_color()),
             Some(line) if Some(index as usize) == current => {
                 (line.text.as_str().into(), line.sung(position).unwrap_or(line.text.len()), ui.visuals().strong_text_color())
             }
@@ -234,7 +232,7 @@ fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_he
         let center = egui::pos2(rect.center().x, top + (row as f32 + 0.5) * line_height + below);
         painter.galley(center - galley.size() / 2.0, galley, weak);
     }
-    if let Some(i) = current.filter(|_| !guessed) {
+    if let Some(i) = current {
         progress_bar(ui, egui::pos2(rect.center().x, top + (middle + 1) as f32 * line_height + 1.0), lyrics.progress(i, position, length));
     }
     ui.allocate_rect(rect, egui::Sense::hover());
