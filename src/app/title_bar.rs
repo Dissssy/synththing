@@ -92,6 +92,13 @@ impl Fit {
 }
 
 impl App {
+    /// The graphics API to draw the window with, picked in Preferences
+    /// (Windows only; taken at launch).
+    #[cfg(windows)]
+    pub fn graphics_backend(&self) -> crate::config::GraphicsBackend {
+        self.config.graphics_backend
+    }
+
     /// Whether the window has the system's frame: when asked for in
     /// Preferences, and in the layouts without the title bar; never as the
     /// mini player.

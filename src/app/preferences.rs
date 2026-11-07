@@ -402,6 +402,7 @@ impl App {
         let mut canary = self.config.canary_updates();
         let mut close_to_tray = self.config.close_to_tray.unwrap_or(false);
         let mut native_frame = self.config.native_frame;
+        let mut graphics_backend = self.config.graphics_backend;
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
@@ -783,6 +784,26 @@ impl App {
                              middle to move the window, double-click it to maximize).",
                             |ui| ui.checkbox(&mut native_frame, "Use the system's window frame"),
                         );
+                        if cfg!(windows) {
+                            with_info(
+                                ui,
+                                "What draws the window, from the next time synththing starts. Vulkan by \
+                                 default; try DirectX 12 if the window misbehaves with it. The \
+                                 WGPU_BACKEND environment variable overrides this. Help > Log's \
+                                 \"graphics:\" line says which is in use.",
+                                |ui| {
+                                    let label = setting_label(ui, "Graphics");
+                                    let combo = setting_combo(ui, "graphics_backend", 0.0)
+                                        .selected_text(graphics_backend.name())
+                                        .show_ui(ui, |ui| {
+                                            for backend in crate::config::GraphicsBackend::ALL {
+                                                ui.selectable_value(&mut graphics_backend, backend, backend.name());
+                                            }
+                                        });
+                                    label | combo.response
+                                },
+                            );
+                        }
                         if self.has_tray() {
                             with_info(
                                 ui,
@@ -859,6 +880,7 @@ impl App {
             || (self.has_tray() && Some(close_to_tray) != self.config.close_to_tray && (close_to_tray || self.config.close_to_tray.is_some()))
             || warn_heavy != self.config.warn_heavy_midi.unwrap_or(true)
             || native_frame != self.config.native_frame
+            || graphics_backend != self.config.graphics_backend
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
             || script_log != self.config.script_log_to_app
@@ -900,6 +922,7 @@ impl App {
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);
             self.config.native_frame = native_frame;
+            self.config.graphics_backend = graphics_backend;
             self.config.beat_pulse = Some(beat_pulse / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE).abs() > 1e-4);
             self.config.beat_pulse_length =
                 Some(pulse_length / 100.0).filter(|&v| (v - config::DEFAULT_BEAT_PULSE_LENGTH).abs() > 1e-4);

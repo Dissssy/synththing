@@ -205,6 +205,10 @@ pub struct Config {
     /// borders) rather than drawing its own (`app/title_bar.rs`).
     #[serde(default)]
     pub native_frame: bool,
+    /// Preference, on Windows: the graphics API that draws the window,
+    /// taken at the next launch (`desktop.rs`; WGPU_BACKEND overrides it).
+    #[serde(default)]
+    pub graphics_backend: GraphicsBackend,
     /// On Android: the visualizer filling the screen draws under a notch
     /// or camera hole too (off: that strip is black).
     #[serde(default)]
@@ -333,6 +337,28 @@ impl MiniPlayerShape {
             Self::Square => "Square",
             Self::Wide => "Wide (16:9)",
             Self::Tall => "Tall (9:16)",
+        }
+    }
+}
+
+/// The graphics API that draws the window on Windows. Vulkan by default;
+/// it once froze the window for good on fast resizes, which frame latency
+/// 2 and mailbox presenting (`desktop.rs`) put right. DirectX 12 is the
+/// fallback where Vulkan misbehaves.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GraphicsBackend {
+    #[default]
+    Vulkan,
+    Dx12,
+}
+
+impl GraphicsBackend {
+    pub const ALL: [Self; 2] = [Self::Vulkan, Self::Dx12];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Dx12 => "DirectX 12",
+            Self::Vulkan => "Vulkan",
         }
     }
 }
