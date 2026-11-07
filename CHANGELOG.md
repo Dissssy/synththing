@@ -7,6 +7,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Added
 - Visualizer scripts can tell the time: `now()` gives today's date and the time of day (local, or UTC), `unix_time()` the seconds since 1970, and `format_time("%H:%M")` turns either into text. In a recording the clock is recording time, so a clock drawn into the video reads as it would have live.
 - Visualizer scripts get `noise(x, y, z)`, smooth simplex noise, and `ease("out_cubic", t)`, the common easing curves (sine, quad, cubic, quart, quint, expo, circ, back, elastic, bounce, each in, out or in-out).
+- Visualizer scripts can read what the library knows of the playing song with `song_details()`: your edits, tags, whether it's starred, its plays and skips, when it was last played and every other song field, kept up to date as they change.
 - Visualizer scripts can read the app theme's colors with `theme()` (background, text, accent, the playing song's color and the rest), to match the look you picked.
 - Visualizer scripts can make seeded random generators with `random(seed)`, which give the same numbers for the same seed. In a recording `math.random` is seeded from the song as well, so recording the same song twice gives the same video.
 

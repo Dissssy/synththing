@@ -74,6 +74,7 @@
 //! * `now()`, `unix_time()`, `format_time()`: the date and time of day,
 //!   recording time in a recording (`script_clock.rs`).
 //! * `theme()`: the app theme's colors (`script_theme.rs`).
+//! * `song_details()`: what the library knows of the song (`script_song.rs`).
 //! * `noise()`, `ease()` and `random(seed)`: smooth noise, easing curves and
 //!   seeded generators; `math.random` is seeded from the song in a
 //!   recording, so it renders the same every time (`script_math.rs`).
@@ -1931,6 +1932,9 @@ pub struct LuaVisualizer {
     app_log: Rc<Cell<bool>>,
     /// The app's theme (`theme()`); outlives recompiles.
     theme: Rc<RefCell<crate::theme::Theme>>,
+    /// What the library knows of the song (`song_details()`); outlives
+    /// recompiles.
+    song_details: Rc<RefCell<Option<crate::script_song::SongDetails>>>,
     /// Whether the script reads its saved data (store, settings, controls)
     /// from beside its file; off for previews (`ignore_saved_data`).
     saved_data: bool,
@@ -1967,6 +1971,7 @@ impl LuaVisualizer {
             app_log: Rc::default(),
             saved_data: true,
             theme: Rc::new(RefCell::new(crate::theme::default_theme())),
+            song_details: Rc::default(),
         };
         visualizer.set_source(source);
         visualizer
@@ -2087,6 +2092,11 @@ impl LuaVisualizer {
         let mut song = self.song.borrow_mut();
         song.recording = recording;
         song.take = take;
+    }
+
+    /// What the library knows of the playing song, for `song_details()`.
+    pub fn set_song_details(&mut self, details: Option<crate::script_song::SongDetails>) {
+        *self.song_details.borrow_mut() = details;
     }
 
     /// The app's theme, for `theme()`.
@@ -2228,6 +2238,7 @@ impl LuaVisualizer {
             self.watchdog_limit,
             &self.app_log,
             &self.theme,
+            &self.song_details,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
@@ -2296,6 +2307,7 @@ impl LuaVisualizer {
             self.watchdog_limit,
             &self.app_log,
             &self.theme,
+            &self.song_details,
         ) {
             Ok(compiled) => {
                 self.compiled = Some(compiled);
@@ -2473,6 +2485,7 @@ fn compile(
     watchdog_limit: Duration,
     app_log: &Rc<Cell<bool>>,
     theme: &Rc<RefCell<crate::theme::Theme>>,
+    song_details: &Rc<RefCell<Option<crate::script_song::SongDetails>>>,
 ) -> Result<Compiled, String> {
     // No io/os/ffi/debug: a visualizer script has no legitimate reason to
     // touch the filesystem or spawn processes, even one the user just wrote.
@@ -2637,6 +2650,7 @@ fn compile(
     crate::script_clock::register(&lua, &clock).map_err(|e| e.to_string())?;
     crate::script_math::register(&lua).map_err(|e| e.to_string())?;
     crate::script_theme::register(&lua, theme).map_err(|e| e.to_string())?;
+    crate::script_song::register(&lua, song_details).map_err(|e| e.to_string())?;
 
     let host_globals: HashSet<String> = lua
         .globals()

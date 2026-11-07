@@ -541,6 +541,9 @@ pub struct App {
     /// the script: (its load number, path, notes, id, tags).
     loads_sent: u64,
     pending_script_song: Option<(u64, PathBuf, Arc<crate::midi_notes::NoteList>, String, lua_visualizer::SongTags)>,
+    /// The song the script has, and the library's revision its details
+    /// (`song_details()`) were last made from.
+    script_details: Option<(PathBuf, u64)>,
     /// Songs' art read for the script (`album_art()`), on threads of
     /// their own: the sending side for them, and what they've read.
     script_art: (mpsc::Sender<ScriptArtRead>, mpsc::Receiver<ScriptArtRead>),
@@ -824,6 +827,7 @@ impl App {
             pad_frame: crate::gamepad::PadFrame::default(),
             loads_sent: 0,
             pending_script_song: None,
+            script_details: None,
             script_art: mpsc::channel(),
             song_notes: None,
             accent: None,

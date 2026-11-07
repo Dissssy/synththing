@@ -475,18 +475,19 @@ text(4, 4, note_name(key) .. string.format(" %+d cents", math.floor((key - math.
 
 ## Playback & timing
 
-<!-- api: playback set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
+<!-- api: playback song_details set_paused seek set_speed script_options DT TIME FRAME SAMPLE_RATE -->
 ```lua
-playback() -> playback    -- what's playing and where, times in song seconds (since 0.1.1)
-set_paused(paused)        -- pause or resume playback (applied after this frame) (since 0.1.4)
-seek(seconds)             -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
-set_speed(speed)          -- playback speed (applied after this frame) (since 0.2.0)
-                          -- speed: 1.0 is normal
-script_options(options)   -- once, at the top: how the app treats this script (since 0.2.0)
-DT                        -- seconds since the previous render() call (0.0 on the first, at most 0.25) (since 0.1.1)
-TIME                      -- seconds since this script started, wall clock, uncapped (since 0.1.4)
-FRAME                     -- frames rendered since this script started (1 on the first) (since 0.1.4)
-SAMPLE_RATE               -- the engine's sample rate, in Hz (since 0.1.1)
+playback() -> playback      -- what's playing and where, times in song seconds (since 0.1.1)
+song_details() -> details   -- what the library knows of the playing song (edits, tags, plays...), or nil for a song not in it (since next)
+set_paused(paused)          -- pause or resume playback (applied after this frame) (since 0.1.4)
+seek(seconds)               -- jump to a song position, seek(0) restarts (applied after this frame) (since 0.1.4)
+set_speed(speed)            -- playback speed (applied after this frame) (since 0.2.0)
+                            -- speed: 1.0 is normal
+script_options(options)     -- once, at the top: how the app treats this script (since 0.2.0)
+DT                          -- seconds since the previous render() call (0.0 on the first, at most 0.25) (since 0.1.1)
+TIME                        -- seconds since this script started, wall clock, uncapped (since 0.1.4)
+FRAME                       -- frames rendered since this script started (1 on the first) (since 0.1.4)
+SAMPLE_RATE                 -- the engine's sample rate, in Hz (since 0.1.1)
 ```
 <!-- /api -->
 
@@ -549,6 +550,13 @@ function render(width, height, left, right)
         set_paused(false)
     end
 end
+```
+
+`song_details()` is what the library knows of the playing song, with the user's edits over what the file says: `title`, `album`, `year`, its `artist`, `genre` and `tag` names as lists, whether it's `starred`, its `plays`, `skips` and `last_played` (Unix seconds, so `format_time("%d %b", d.last_played)` works) and the rest under Tables (`SongDetails`; the keys are the ones song name patterns use). A field the library doesn't know is nil, and the whole thing is nil for a song that isn't in the library (or in previews and command-line runs). It follows changes as they happen, like starring the song.
+
+```lua
+local d = song_details()
+if d and d.starred then text(4, 4, "* " .. (d.title or ""), theme().star) end
 ```
 
 `script_options` only takes the options it knows (`start_paused`, `app_log`, `record_prepare`, `record_auto`, `transparent` and `assets`, each true or false; see Logging for `app_log`, Recording for `record_prepare` and `record_auto`, the clear color for `transparent`, and Assets for `assets`), and an unknown one is an error that says so, so a typo can't go unnoticed. Several can go in one call: `script_options({ start_paused = true, app_log = true })`.
@@ -1239,6 +1247,51 @@ SongNote                -- a whole note of the song (notes_between()), times in 
     velocity: integer
     start: number
     stop: number
+
+SongDetails                        -- what the library knows of a song (song_details()), with the user's edits; a field it doesn't know is nil. Keys are the ones song name patterns use
+    title?: string
+    artist?: string[]              -- a song can be by several
+    album_artist?: string[]
+    album?: string
+    composer?: string[]
+    genre?: string[]
+    track?: integer
+    disc?: integer
+    year?: integer
+    grouping?: string
+    comment?: string
+    length?: number                -- seconds
+    bpm?: number
+    notes?: integer                -- a MIDI file's
+    file_name?: string             -- without its extension
+    file_extension?: string        -- lowercase
+    size?: number                  -- MB
+    bit_rate?: number              -- kbps
+    sample_rate?: integer
+    imported?: integer             -- when it came into the library, Unix seconds
+    tag?: string[]                 -- its tags' names
+    starred: boolean
+    compilation: boolean
+    composer_as_artist: boolean
+    sort_title?: string
+    sort_album?: string
+    sort_artist?: string
+    sort_album_artist?: string
+    sort_composer?: string
+    start_time?: number            -- seconds
+    stop_time?: number             -- seconds
+    volume_adjust?: number         -- -100 to 100 (%)
+    skip_shuffle: boolean
+    remember_position: boolean
+    musicbrainz_release?: string
+    added_by?: string              -- the Local API program that added it
+    matched: boolean
+    album_matched: boolean
+    loudness?: number              -- LUFS
+    plays?: integer                -- on every device
+    skips?: integer
+    last_played?: integer          -- Unix seconds
+    last_skipped?: integer         -- Unix seconds
 
 Theme                       -- the app theme's colors (theme())
     name: string

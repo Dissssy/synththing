@@ -167,7 +167,17 @@ impl App {
             && let Some((_, path, notes, id, tags)) = self.pending_script_song.take()
         {
             self.song_notes = Some(Arc::clone(&notes));
+            self.script_details = Some((path.clone(), u64::MAX));
             self.script.set_song(path, id, notes, tags);
+        }
+        // Its details again whenever the library changes (a star, a play,
+        // an edit).
+        let revision = self.songs.revision();
+        if let Some((path, made)) = &mut self.script_details
+            && *made != revision
+        {
+            *made = revision;
+            self.script.set_song_details(crate::script_song::details(&self.songs, path));
         }
         while let Ok((path, art)) = self.script_art.1.try_recv() {
             self.script.set_art(path, art);
