@@ -91,6 +91,58 @@ impl MidiFileSequencer {
         self.synthesizer.reset()
     }
 
+    /// LOCAL PATCH (synththing): jump straight to `target` seconds without
+    /// rendering. Restarts from the top, then applies every message before
+    /// `target` except notes (program, bank, controllers, pitch bend, so the
+    /// channels are set up exactly as the score left them), and finally
+    /// strikes the notes the score holds at `target` so they don't drop out.
+    /// Cost is one pass over the message list, not over the song's audio.
+    pub fn seek(&mut self, target: f64) {
+        let Some(midi_file) = self.midi_file.clone() else {
+            return;
+        };
+        let play_loop = self.play_loop;
+        self.play(&midi_file, play_loop);
+
+        let target = target.max(0.0);
+        while self.msg_index < midi_file.messages.len() && midi_file.times[self.msg_index] < target {
+            match midi_file.messages[self.msg_index] {
+                Message::Normal { status, data1, data2 } => {
+                    let channel = status & 0x0F;
+                    let command = status & 0xF0;
+                    if command == 0x90 || command == 0x80 {
+                        let held = command == 0x90 && data2 > 0;
+                        self.active_grid[(channel as usize) * 128 + data1 as usize] =
+                            if held { data2 } else { 0 };
+                    } else {
+                        self.synthesizer.process_midi_message(
+                            channel as i32,
+                            command as i32,
+                            data1 as i32,
+                            data2 as i32,
+                        );
+                    }
+                }
+                Message::LoopStart if self.play_loop => self.loop_index = self.msg_index,
+                _ => (),
+            }
+            self.msg_index += 1;
+        }
+        self.current_time = target;
+
+        for channel in 0..16usize {
+            if self.channel_mask & (1 << channel) == 0 {
+                continue;
+            }
+            for key in 0..128usize {
+                let velocity = self.active_grid[channel * 128 + key];
+                if velocity > 0 {
+                    self.synthesizer.note_on(channel as i32, key as i32, velocity as i32);
+                }
+            }
+        }
+    }
+
     /// Stops playing.
     pub fn stop(&mut self) {
         self.midi_file = None;
