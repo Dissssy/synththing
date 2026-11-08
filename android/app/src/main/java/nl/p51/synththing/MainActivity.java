@@ -434,6 +434,16 @@ public class MainActivity extends NativeActivity {
     }
 
     @Override
+    protected void onDestroy() {
+        // NativeActivity's onDestroy waits for the native side to stop,
+        // which it never does (winit ignores onDestroy), so the main thread
+        // would hang here: "isn't responding", then a grey screen. The app
+        // saves and ends the process instead; this doesn't return.
+        Native.destroyed();
+        super.onDestroy();
+    }
+
+    @Override
     public void onPictureInPictureModeChanged(boolean inPictureInPictureMode, Configuration newConfig) {
         super.onPictureInPictureModeChanged(inPictureInPictureMode, newConfig);
         Native.pictureInPicture(inPictureInPictureMode);
