@@ -105,9 +105,14 @@ impl MidiFileSequencer {
         self.play(&midi_file, play_loop);
 
         let target = target.max(0.0);
-        while self.msg_index < midi_file.messages.len() && midi_file.times[self.msg_index] < target {
+        while self.msg_index < midi_file.messages.len() && midi_file.times[self.msg_index] < target
+        {
             match midi_file.messages[self.msg_index] {
-                Message::Normal { status, data1, data2 } => {
+                Message::Normal {
+                    status,
+                    data1,
+                    data2,
+                } => {
                     let channel = status & 0x0F;
                     let command = status & 0xF0;
                     if command == 0x90 || command == 0x80 {
@@ -137,7 +142,8 @@ impl MidiFileSequencer {
             for key in 0..128usize {
                 let velocity = self.active_grid[channel * 128 + key];
                 if velocity > 0 {
-                    self.synthesizer.note_on(channel as i32, key as i32, velocity as i32);
+                    self.synthesizer
+                        .note_on(channel as i32, key as i32, velocity as i32);
                 }
             }
         }
