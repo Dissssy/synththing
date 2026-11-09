@@ -101,6 +101,13 @@ pub extern "system" fn Java_nl_p51_synththing_Native_pictureInPicture<'local>(
     synththing::android::set_picture_in_picture(on != 0);
 }
 
+/// `Native.destroyed()`: the activity is being destroyed. Doesn't return:
+/// the process ends.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_nl_p51_synththing_Native_destroyed<'local>(_env: JNIEnv<'local>, _class: JClass<'local>) {
+    synththing::android::destroyed();
+}
+
 /// `Native.openLink(String link)`: the app was opened with a link.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_nl_p51_synththing_Native_openLink<'local>(
