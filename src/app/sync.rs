@@ -44,6 +44,13 @@ impl App {
         self.sync.engine.songs_changed();
     }
 
+    /// The hub's disk, as it last said, and whether it's full, unless this
+    /// device is the hub.
+    pub(super) fn hub_room(&self) -> Option<(Option<crate::storage::Disk>, bool)> {
+        let me = self.sync.engine.device_id();
+        self.sync.engine.hub().filter(|hub| Some(hub.device.as_str()) != me).map(|hub| (hub.disk, hub.full))
+    }
+
     /// Whether the user has a hub (which does the library's background
     /// work: `crate::background`).
     pub(super) fn has_hub(&self) -> bool {
@@ -313,8 +320,11 @@ impl App {
                     Some(name) => name,
                     None => "A device on an older version",
                 });
-                if hub.as_ref().is_some_and(|hub| hub.device == device.id) {
+                if let Some(hub) = hub.as_ref().filter(|hub| hub.device == device.id) {
                     ui.weak("hub").on_hover_text("Your hub: songs go straight to and from it, from devices that reach it");
+                    if hub.full {
+                        ui.colored_label(ui.visuals().warn_fg_color, "full").on_hover_text(super::storage::HUB_FULL_HINT);
+                    }
                 }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if device.id == me {
