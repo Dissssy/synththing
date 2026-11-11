@@ -77,7 +77,7 @@ impl App {
                 }
             });
             if let Some(error) = &rename.error {
-                ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+                ui.colored_label(ui.visuals().error_fg_color, error);
             }
             if waiting {
                 ui.weak("Renaming, once the script finishes what it's doing...");
@@ -148,7 +148,7 @@ impl App {
                     self.set_open(Section::Editor, true);
                 }
             }
-            ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error);
+            ui.colored_label(ui.visuals().error_fg_color, error);
         });
     }
 

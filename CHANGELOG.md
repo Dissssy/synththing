@@ -4,8 +4,15 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- The seek bar covers only the part of a song that plays: for a song with a start or stop time (Song info > Options), it runs from its start time to its stop time, and the times beside it count from its start time. To see the whole song with those times marked on it instead, pick Whole song, marked under Preferences > Appearance > Seek bar > Start and stop times.
+
 ### Added
 - Type in an exact playback speed or volume: click the value beside the speed or volume slider in the controls bar (or above it, when the bar is narrow) and type, say, 0.9818 for A=432 Hz tuning, then press Enter. Speed shows up to 4 decimals. Dragging the value nudges it.
+- Themes now set every color in the app: new colors for things done ("Saved ..." in the status line and its messages, lines added, "Listening"), synththing's own things in the online library, shadows, and the script editor's code (keywords, functions, strings, numbers, comments). Warnings and errors everywhere, the log included, follow the theme's colors.
+
+### Changed
+- The theme editor is redone: your themes listed under the built-in ones, the colors in sections (General, Text, Controls, Status, Lists, Code, Shape) with each color's hex beside it, and a preview pinned at the bottom. Change a built-in theme straight away and save it as a copy when you like it. Rename your own with the pencil by its name.
 - Wishlist: a broom button on the Got it heading takes every wish that came true off the wishlist at once (click it twice to confirm).
 - The script editor's problems menu has a Copy all button, which copies every problem the script has, one per line with its line number.
 

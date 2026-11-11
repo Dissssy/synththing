@@ -96,6 +96,7 @@ pub const CATEGORIES: &[Category] = &[
         settings: &[
             setting("theme", "Theme", &["theme", "custom_themes"]),
             setting("beat_pulse", "Beat pulse", &["beat_pulse", "beat_pulse_length"]),
+            setting("seek_bar_marks", "Seek bar over start and stop times", &["seek_bar_marks"]),
             setting("song_names", "Song names", &["title_patterns"]),
             setting("tile_letters", "Letters on tiles without art", &["tile_letters"]),
         ],

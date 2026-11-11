@@ -29,13 +29,13 @@ const KEYWORDS: &[&str] = &[
     "in", "local", "nil", "not", "or", "repeat", "return", "then", "true", "until", "while",
 ];
 
-fn color_for(kind: Kind, visuals: &egui::Visuals) -> Color32 {
+fn color_for(kind: Kind, syntax: &crate::theme::Syntax, visuals: &egui::Visuals) -> Color32 {
     match kind {
-        Kind::Keyword => Color32::from_rgb(198, 120, 221),
-        Kind::HostApi => Color32::from_rgb(97, 175, 239),
-        Kind::String => Color32::from_rgb(152, 195, 121),
-        Kind::Number => Color32::from_rgb(209, 154, 102),
-        Kind::Comment => Color32::from_rgb(130, 137, 151),
+        Kind::Keyword => syntax.keyword.0,
+        Kind::HostApi => syntax.function.0,
+        Kind::String => syntax.string.0,
+        Kind::Number => syntax.number.0,
+        Kind::Comment => syntax.comment.0,
         Kind::Plain => visuals.text_color(),
     }
 }
@@ -61,7 +61,8 @@ pub fn layout(
     job.wrap.max_width = wrap_width;
     let visuals = ui.visuals();
     let font_id = FontId::monospace(font_size);
-    let error_color = Color32::from_rgb(220, 90, 90);
+    let error_color = visuals.error_fg_color;
+    let syntax = crate::theme::palette(ui.ctx()).syntax;
     // Byte offsets of the color tables' `{`.
     let swatch_at: Vec<usize> = if swatches {
         let literals = crate::code_edit::color_literals(source);
@@ -86,7 +87,7 @@ pub fn layout(
         // split it at newlines to mark exactly the error line.
         for piece in text.split_inclusive('\n') {
             let mut format =
-                TextFormat { font_id: font_id.clone(), color: color_for(kind, visuals), ..Default::default() };
+                TextFormat { font_id: font_id.clone(), color: color_for(kind, &syntax, visuals), ..Default::default() };
             if Some(line) == error_line {
                 format.underline = egui::Stroke::new(1.5, error_color);
                 format.background = error_color.gamma_multiply(0.15);

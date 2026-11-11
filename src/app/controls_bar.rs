@@ -14,7 +14,7 @@ use crate::select_list;
 use crate::lua_visualizer;
 use crate::playlist::LoopMode;
 
-use super::{App, editor, fmt_time, icon, icon_button, on_color, palette_color, playback_state_text, tags, toast};
+use super::{App, editor, fmt_time, icon, icon_button, on_color, playback_state_text, tags, toast};
 
 impl App {
     /// The seek bar's color: the tempo's (`tempo_color`), easing toward a
@@ -103,16 +103,18 @@ impl App {
         ui.add_space(6.0);
     }
 
-    /// The seek bar, between the time it's at and the song's length.
+    /// The seek bar, between the time it's at and how long the song plays
+    /// (`seek_shown`).
     pub(super) fn seek_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let accent = self.transport_accent(ui.ctx(), view);
+        let shown = self.seek_shown(view);
         ui.horizontal(|ui| {
-            ui.weak(fmt_time(view.position));
+            ui.weak(fmt_time(shown.at));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(fmt_time(view.length));
+                ui.weak(fmt_time(shown.length));
                 ui.spacing_mut().slider_width = ui.available_width();
                 let mut position = view.position;
-                if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
+                if seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed() {
                     self.send(AudioCommand::Seek(position));
                 }
             });
@@ -668,7 +670,7 @@ pub(crate) fn play_button(ctx: &egui::Context, paused: bool, icon_size: f32, siz
     if paused {
         return egui::Button::new(egui::RichText::new(icon("play")).size(icon_size)).min_size(size);
     }
-    let color = crate::theme::playing_color(ctx);
+    let color = crate::theme::palette(ctx).playing.0;
     egui::Button::new(egui::RichText::new(icon("pause")).size(icon_size).color(color))
         .min_size(size)
         .fill(color.gamma_multiply(0.15))
@@ -688,10 +690,19 @@ pub(super) fn shuffle_text(on: bool) -> &'static str {
     if on { "Shuffle: on" } else { "Shuffle: off" }
 }
 
-/// The seek bar over a song `length` seconds long, in `accent` (the
-/// tempo's color) when there is one.
-pub(super) fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, accent: Option<egui::Color32>) -> egui::Response {
+/// The seek bar over `span` (song seconds), in `accent` (the tempo's
+/// color) when there is one, with `marks` (a start and stop time) marked
+/// across its rail.
+pub(super) fn seek_bar_ui(
+    ui: &mut egui::Ui,
+    position: &mut f64,
+    span: std::ops::RangeInclusive<f64>,
+    marks: Option<(f64, f64)>,
+    accent: Option<egui::Color32>,
+) -> egui::Response {
     ui.scope(|ui| {
+        // (Under the slider: the rail and handle drawn over each mark.)
+        let under = ui.painter().add(egui::Shape::Noop);
         let rail_radius = (ui.spacing().slider_rail_height / 2.0) as u8;
         let visuals = ui.visuals_mut();
         // egui runs the filled part past the handle by the rail's corner
@@ -707,7 +718,25 @@ pub(super) fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, ac
                 state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
             }
         }
-        ui.add(egui::Slider::new(position, 0.0..=length.max(0.001)).show_value(false).trailing_fill(true))
+        let (from, to) = (*span.start(), span.end().max(span.start() + 0.001));
+        let response = ui.add(egui::Slider::new(position, from..=to).show_value(false).trailing_fill(true));
+        if let Some((start, stop)) = marks {
+            // (Where egui puts a value along the slider: its handle's
+            // center stays a handle's half width in from either end.)
+            let rect = response.rect;
+            let inset = rect.height() / 2.5
+                * match ui.visuals().handle_shape {
+                    egui::style::HandleShape::Circle => 1.0,
+                    egui::style::HandleShape::Rect { aspect_ratio } => aspect_ratio,
+                };
+            let x = |t: f64| rect.left() + inset + (rect.width() - 2.0 * inset) * ((t - from) / (to - from)).clamp(0.0, 1.0) as f32;
+            let stroke = egui::Stroke::new(2.0, ui.visuals().text_color());
+            let half = rect.height() * 0.35;
+            let ticks = [start, stop]
+                .map(|t| egui::Shape::line_segment([egui::pos2(x(t), rect.center().y - half), egui::pos2(x(t), rect.center().y + half)], stroke));
+            ui.painter().set(under, egui::Shape::Vec(ticks.into()));
+        }
+        response
     })
     .inner
 }
@@ -730,15 +759,9 @@ pub(super) fn tempo_color(bpm: f64) -> [f32; 3] {
 /// The status line's color, by what it says: red for something that
 /// failed ("Couldn't ...", "Failed to ..."), green for something done
 /// ("Saved ...", "Installed ..."), none (grey) for anything else.
-pub(super) fn status_color(visuals: &egui::Visuals, status: &str) -> Option<egui::Color32> {
-    match status_outcome(status)? {
-        false => Some(visuals.error_fg_color),
-        true => {
-            // (The palette's green, darker on a light theme so it reads.)
-            let green = palette_color(2);
-            Some(if visuals.dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
-        }
-    }
+pub(super) fn status_color(ctx: &egui::Context, status: &str) -> Option<egui::Color32> {
+    let palette = crate::theme::palette(ctx);
+    Some(if status_outcome(status)? { palette.success.0 } else { palette.error.0 })
 }
 
 /// Whether a status says something failed (`Some(false)`), was done
@@ -798,7 +821,7 @@ pub(super) fn status_line_ui(
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for entry in &recent {
                     ui.horizontal_wrapped(|ui| {
-                        match status_color(ui.visuals(), &entry.message) {
+                        match status_color(ui.ctx(), &entry.message) {
                             Some(color) => ui.colored_label(color, &entry.message),
                             None => ui.label(&entry.message),
                         };
@@ -816,7 +839,7 @@ pub(super) fn status_line_ui(
     if shown {
         *unseen_failure = false;
     }
-    let text = match status_color(ui.visuals(), status) {
+    let text = match status_color(ui.ctx(), status) {
         Some(color) => egui::RichText::new(status).color(color),
         None => egui::RichText::new(status).weak(),
     };

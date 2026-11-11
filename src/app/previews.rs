@@ -605,7 +605,7 @@ impl super::App {
             match &installed {
                 Some(i) if official(&i.author_id) || (i.id.is_empty() && bundled.is_some()) => {
                     ui.weak("by");
-                    ui.label(egui::RichText::new(i.author_name.as_deref().unwrap_or("synththing")).color(super::library::OFFICIAL_GOLD))
+                    ui.label(egui::RichText::new(i.author_name.as_deref().unwrap_or("synththing")).color(crate::theme::palette(ui.ctx()).official.0))
                         .on_hover_text(super::library::OFFICIAL_HOVER);
                 }
                 Some(i) if i.receipt.is_some() || (i.author_id.is_some() && i.author_id == mine) => {
@@ -621,7 +621,7 @@ impl super::App {
                 }
                 None if bundled.is_some() => {
                     ui.weak("by");
-                    ui.label(egui::RichText::new("synththing").color(super::library::OFFICIAL_GOLD))
+                    ui.label(egui::RichText::new("synththing").color(crate::theme::palette(ui.ctx()).official.0))
                         .on_hover_text(super::library::OFFICIAL_HOVER);
                 }
                 None => {

@@ -76,7 +76,7 @@ impl App {
             .show(ctx, |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        ui.colored_label(egui::Color32::from_rgb(230, 180, 80), "!");
+                        ui.colored_label(ui.visuals().warn_fg_color, "!");
                         ui.label(format!("{name} hasn't finished a frame in {:.1} s", busy.as_secs_f32()));
                         stop = ui
                             .button("Stop")
