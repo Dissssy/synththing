@@ -21,7 +21,7 @@ use tiny_http::Request;
 
 use super::{error, json, notifications, now, read_body, remove_previews, signer, Reply, State};
 use crate::library::{
-    key_id, AdminAction, AdminScriptInfo, ApiError, Ban, EncoreState, Report, ReportRequest, MAX_REPORT_DETAILS,
+    key_id, AdminAction, AdminScriptInfo, ApiError, Ban, EncoreState, HubAction, Report, ReportRequest, MAX_REPORT_DETAILS,
     MAX_REPORT_MARKS, REPORT_REASONS,
 };
 
@@ -320,6 +320,7 @@ pub(super) fn admin(state: &State, request: &mut Request) -> Reply {
                     | AdminAction::Usage { .. }
                     | AdminAction::UsagePerf { .. }
                     | AdminAction::UsageRules { set: None }
+                    | AdminAction::Hub(HubAction::List)
             ) {
                 println!("admin {who}: {}", serde_json::to_string(&action).unwrap_or_default());
             }
@@ -511,6 +512,10 @@ fn act(state: &State, action: &AdminAction) -> Acted {
                 super::usage::set_rules(&mut db, set).map_err(|e| (400, e))?;
             }
             Ok(serde_json::json!(super::usage::rules(&db).map_err(db_error)?))
+        }
+        AdminAction::Hub(action) => {
+            drop(db);
+            super::hubhost::act(state, action)
         }
         AdminAction::UpdateCheck => {
             drop(db);

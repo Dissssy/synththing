@@ -110,6 +110,7 @@ Runs a server (how it works is in docs/SERVER.md, running one for real in docs/D
 - `relay_song_mb`, `relay_mb_per_identity`: the biggest song the relay keeps for a device that isn't open (250), and how much it keeps per identity in all (2048; past it, the oldest go). Songs streamed straight between two open devices aren't kept, and have no limit.
 - `intake`: hand feedback out to the hourly intake run, with the token in `intake.token` (false; docs/DEPLOY.md, Feedback intake).
 - `android_fingerprints`: the SHA-256 fingerprints of the key the Android app is signed with, served in `/.well-known/assetlinks.json` so Android opens this server's sign-in links in the app (docs/DEPLOY.md).
+- `hubhost`: where this server's hub host listens (none), e.g. `http://host.docker.internal:7444`: admins then manage the hubs it hosts from the app's Moderation window (docs/SERVER.md, Hosted hubs).
 - `preview_seconds`: how long making one may take before it's stopped (120); the first frame it drew stays as the still.
 - `authority`: this server is an identity authority itself (false): it issues rotations (an identity moving to a new key), and with `mail`, attaches recovery emails and recovers identities by them (docs/SERVER.md).
 - `public_url`: the address people reach it at, for links in its emails (e.g. `https://scripts.example.org`).

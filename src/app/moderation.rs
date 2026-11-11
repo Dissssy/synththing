@@ -8,7 +8,9 @@
 //! delete, ban (a key or an address, for a while or for good), and mark
 //! reports dealt with; the same actions as `synththing admin` on the
 //! server. Whether the user is an admin is asked when the Library first
-//! talks to the server, and again with each search until they are.
+//! talks to the server, and again with each search until they are. The Hubs
+//! tab is for the hubs the server hosts: what each uses of its room, what
+//! the pool they share costs, and making, resizing and deleting them.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -18,7 +20,8 @@ use eframe::egui;
 use super::App;
 use crate::library::identity::Identity;
 use crate::library::{
-    self, ago, client, lines_text, report_reason_title, AdminAction, Ban, CopyrightNotice, Feedback, NoticeView, Report,
+    self, ago, client, lines_text, report_reason_title, AdminAction, Ban, CopyrightNotice, Feedback, HostedHubs, HubAction, NoticeView,
+    Report,
     ReportRequest, MAX_REPORT_DETAILS, MAX_REPORT_MARKS, REPORT_REASONS,
 };
 use crate::sprite_code::{self, SpriteCall};
@@ -37,6 +40,7 @@ enum Event {
     Bans(Result<Vec<Ban>, String>),
     Admins(Result<Vec<(String, String)>, String>),
     Version(Result<library::ServerVersion, String>),
+    Hubs(Result<HostedHubs, String>),
     /// A reported version's source, for an admin: (script, version).
     Source(String, u32, Result<String, String>),
     /// A script's author's key (or, anonymous, the address it came from),
@@ -73,6 +77,7 @@ enum Tab {
     Admins,
     Copyright,
     Feedback,
+    Hubs,
     Server,
 }
 
@@ -85,6 +90,20 @@ struct BanForm {
     ban_addresses: bool,
 }
 
+/// A hub being made.
+struct HubForm {
+    name: String,
+    size_gb: u64,
+    owner: String,
+    note: String,
+}
+
+impl Default for HubForm {
+    fn default() -> Self {
+        Self { name: String::new(), size_gb: 50, owner: String::new(), note: String::new() }
+    }
+}
+
 /// The Moderation window.
 struct Window {
     tab: Tab,
@@ -95,6 +114,10 @@ struct Window {
     version: Option<Result<library::ServerVersion, String>>,
     notices: Option<Result<Vec<NoticeView>, String>>,
     feedback: Option<Result<Vec<Feedback>, String>>,
+    hubs: Option<Result<HostedHubs, String>>,
+    new_hub: HubForm,
+    /// Sizes typed for hubs, not yet set: by hub name.
+    hub_sizes: HashMap<String, u64>,
     /// The note going with a copyright decision.
     copyright_note: String,
     /// The note going with feedback marked dealt with.
@@ -279,6 +302,9 @@ impl App {
             version: None,
             notices: None,
             feedback: None,
+            hubs: None,
+            new_hub: HubForm::default(),
+            hub_sizes: HashMap::new(),
             copyright_note: String::new(),
             feedback_note: String::new(),
             shown: HashSet::new(),
@@ -306,6 +332,10 @@ impl App {
             Tab::Server => window.version = None,
             Tab::Copyright => window.notices = None,
             Tab::Feedback => window.feedback = None,
+            Tab::Hubs => {
+                window.hubs = None;
+                window.hub_sizes.clear();
+            }
         }
         self.spawn_moderation(move || match tab {
             Tab::Reports => Event::Reports(client::admin(&server, &key, &identity, &AdminAction::Reports { all })),
@@ -314,6 +344,7 @@ impl App {
             Tab::Server => Event::Version(client::admin(&server, &key, &identity, &AdminAction::UpdateCheck)),
             Tab::Copyright => Event::Notices(client::admin(&server, &key, &identity, &AdminAction::Notices { all })),
             Tab::Feedback => Event::Feedback(client::admin(&server, &key, &identity, &AdminAction::Feedback { all })),
+            Tab::Hubs => Event::Hubs(client::admin(&server, &key, &identity, &AdminAction::Hub(HubAction::List))),
         });
     }
 
@@ -408,6 +439,11 @@ impl App {
                 Event::Feedback(result) => {
                     if let Some(w) = window {
                         w.feedback = Some(result);
+                    }
+                }
+                Event::Hubs(result) => {
+                    if let Some(w) = window {
+                        w.hubs = Some(result);
                     }
                 }
                 Event::Version(result) => {
@@ -629,6 +665,7 @@ impl App {
                     (Tab::Feedback, "Feedback"),
                     (Tab::Bans, "Bans"),
                     (Tab::Admins, "Admins"),
+                    (Tab::Hubs, "Hubs"),
                     (Tab::Server, "Server"),
                 ] {
                     if ui.selectable_label(window.tab == tab, title).clicked() && window.tab != tab {
@@ -656,6 +693,7 @@ impl App {
                     Tab::Server => server_tab_ui(ui, &window, &mut actions),
                     Tab::Copyright => copyright_tab_ui(ui, &mut window, &mut actions),
                     Tab::Feedback => feedback_tab_ui(ui, &mut window, &mut actions),
+                    Tab::Hubs => hubs_tab_ui(ui, &mut window, &mut actions),
                 }
             });
             ui.separator();
@@ -1183,6 +1221,116 @@ fn copyright_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(S
 /// A time to come, as how long until it.
 fn until(time: i64) -> String {
     format!("in {}", crate::song_info::format_length((time - now()).max(0) as f64))
+}
+
+/// The hubs the server hosts: the pool they share, each hub, and making one.
+fn hubs_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String, Vec<AdminAction>)>) {
+    let size = crate::storage::size_text;
+    let before = actions.len();
+    let hosted = match &window.hubs {
+        None => {
+            ui.spinner();
+            return;
+        }
+        Some(Err(e)) => {
+            ui.colored_label(ui.visuals().warn_fg_color, format!("Couldn't get the hubs: {e}"));
+            return;
+        }
+        Some(Ok(hosted)) => hosted,
+    };
+    let pool = &hosted.pool;
+    ui.label(format!(
+        "The hubs share a {} volume: {} used, {} GB given out.",
+        size(pool.size_bytes),
+        size(pool.used_bytes),
+        pool.granted_gb
+    ));
+    match (&hosted.monthly_cost, &hosted.monthly_cost_error) {
+        (Some(cost), _) => {
+            ui.weak(format!("It costs {:.2} {} a month, before tax.", cost.net, cost.currency))
+                .on_hover_text("The volume is only as large as the hubs' sizes added up: it grows when a hub is made or given more room");
+        }
+        (None, Some(error)) => {
+            ui.weak(format!("Couldn't look up what it costs: {error}"));
+        }
+        (None, None) => {}
+    }
+    ui.separator();
+    if hosted.hubs.is_empty() {
+        ui.weak("No hubs yet.");
+    }
+    for hub in &hosted.hubs {
+        ui.horizontal_wrapped(|ui| {
+            ui.strong(&hub.name);
+            if hub.state != "running" {
+                ui.colored_label(ui.visuals().warn_fg_color, &hub.state);
+            }
+            let used = hub.used_bytes.map_or_else(|| "?".to_string(), size);
+            ui.label(format!("{used} of {} GB", hub.size_gb));
+            let about = [hub.owner.as_ref().map(|owner| format!("#{owner}")), hub.note.clone(), Some(hub.source.clone())];
+            ui.weak(about.into_iter().flatten().collect::<Vec<_>>().join(", "));
+        });
+        ui.horizontal(|ui| {
+            ui.hyperlink(&hub.url);
+            let typed = window.hub_sizes.entry(hub.name.clone()).or_insert(hub.size_gb);
+            ui.add(egui::DragValue::new(typed).range(1..=4096).suffix(" GB"));
+            let typed = *typed;
+            if ui
+                .add_enabled(typed != hub.size_gb, egui::Button::new("Resize"))
+                .on_hover_text("Give it this much room for songs. Less than it holds now is refused")
+                .clicked()
+            {
+                actions.push((String::new(), vec![AdminAction::Hub(HubAction::Resize { name: hub.name.clone(), size_gb: typed })]));
+            }
+            if super::confirm_button(
+                ui,
+                ("hub", &hub.name),
+                egui::Button::new("Delete"),
+                "Stop this hub and delete every song on it. There's no getting them back",
+                "Really delete it and its songs?",
+            ) {
+                actions.push((String::new(), vec![AdminAction::Hub(HubAction::Destroy { name: hub.name.clone() })]));
+            }
+        });
+        ui.add_space(4.0);
+    }
+    ui.separator();
+    ui.label("Make a hub:");
+    let form = &mut window.new_hub;
+    egui::Grid::new("hub_form").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+        ui.label("Name");
+        ui.add(egui::TextEdit::singleline(&mut form.name).hint_text("lowercase: its address starts with it").desired_width(240.0));
+        ui.end_row();
+        ui.label("Room");
+        ui.add(egui::DragValue::new(&mut form.size_gb).range(1..=4096).suffix(" GB"));
+        ui.end_row();
+        ui.label("Whose");
+        ui.add(egui::TextEdit::singleline(&mut form.owner).hint_text("their ID, from Preferences > Account").desired_width(240.0));
+        ui.end_row();
+        ui.label("Note");
+        ui.add(egui::TextEdit::singleline(&mut form.note).desired_width(360.0));
+        ui.end_row();
+    });
+    let ready = !form.name.trim().is_empty() && !form.owner.trim().is_empty();
+    if ui
+        .add_enabled(ready, egui::Button::new("Make hub"))
+        .on_hover_text("Sets its room aside (growing the volume if it takes that) and starts it. This takes a little while")
+        .clicked()
+    {
+        let form = std::mem::take(form);
+        actions.push((
+            String::new(),
+            vec![AdminAction::Hub(HubAction::Add {
+                name: form.name.trim().to_string(),
+                size_gb: form.size_gb,
+                owner: form.owner.trim().trim_start_matches('#').to_string(),
+                note: form.note.trim().to_string(),
+            })],
+        ));
+    }
+    if actions.len() > before {
+        window.message = Some("Asked the hub host: this can take a little while.".into());
+    }
 }
 
 /// The server's version, and updating it.
