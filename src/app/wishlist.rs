@@ -578,7 +578,6 @@ impl App {
         let Some((_, progress)) = &self.wishlist.progress else { return };
         let wishes = &self.wishlist.list.wishes;
         let state_of = |id: &String| progress.get(id).map_or(State::Wanted, Progress::state);
-        // let got = wishes.keys().filter(|id| state_of(id) == State::Got).count();
         let mut act = None;
         // (The filter, parsed again when the query changes.)
         let query = &self.wishlist.filter_box.query;
@@ -600,10 +599,6 @@ impl App {
                 (n, _) => format!("{n} wishes"),
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                // let clear = ui.add_enabled(got > 0, egui::Button::new(format!("Clear got it ({got})")));
-                // if clear.on_hover_text("Take the wishes that came true off the wishlist").clicked() {
-                //     act = Some(Act::Remove(wishes.keys().filter(|id| state_of(id) == State::Got).cloned().collect()));
-                // }
                 let artists: Vec<String> = wishes.values().filter_map(|w| if w.kind == Kind::Artist { Some(&w.title) } else { w.artist.as_ref() }).cloned().collect::<BTreeSet<_>>().into_iter().collect();
                 let programs: Vec<String> = wishes.values().filter_map(|w| w.added_by.clone()).collect::<BTreeSet<_>>().into_iter().collect();
                 let mut complete = |query: &str, cursor, mode| crate::wishlist_search::complete(query, cursor, mode, &artists, &programs);
@@ -617,6 +612,9 @@ impl App {
         // (An artist's shown for any of their albums kept.)
         let shown = |id: &String| kept.contains(id) || self.wishlist.list.under(id).any(|(album, _)| kept.contains(album));
         let mut rows = Vec::new();
+        // (What the Got it heading's clear button takes off: the wishes in that
+        // part as filtered, an artist with their albums.)
+        let mut got = Vec::new();
         for state in State::ALL {
             let mut ids: Vec<&String> = wishes.iter().filter(|(id, w)| on_top(w) && state_of(id) == state && shown(id)).map(|(id, _)| id).collect();
             if ids.is_empty() {
@@ -624,6 +622,9 @@ impl App {
             }
             // (Newest first.)
             ids.sort_by_key(|id| std::cmp::Reverse(wishes[*id].added));
+            if state == State::Got {
+                got = ids.iter().map(|id| (*id).clone()).collect();
+            }
             rows.push(Row::Heading(state, ids.len()));
             if self.wishlist.folded.contains(&state) {
                 continue;
@@ -648,6 +649,14 @@ impl App {
                 Row::Heading(state, count) => {
                     let caret = icon(if folded.contains(state) { "caret-right" } else { "caret-down" });
                     ui.label(egui::RichText::new(format!("{caret} {} ({count})", state.name())).strong());
+                    if *state == State::Got {
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let hover = "Take the wishes that came true off the wishlist";
+                            if super::confirm_button(ui, "clear_got", super::row_icon_button(ui, "broom"), hover, "Really clear?") {
+                                menu_act = Some(Act::Remove(got.clone()));
+                            }
+                        });
+                    }
                     return;
                 }
                 Row::Wish(id, under) => {

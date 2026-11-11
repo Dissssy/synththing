@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Type in an exact playback speed or volume: click the value beside the speed or volume slider in the controls bar (or above it, when the bar is narrow) and type, say, 0.9818 for A=432 Hz tuning, then press Enter. Speed shows up to 4 decimals. Dragging the value nudges it.
+- Wishlist: a broom button on the Got it heading takes every wish that came true off the wishlist at once (click it twice to confirm).
 - The script editor's problems menu has a Copy all button, which copies every problem the script has, one per line with its line number.
 
 ### Fixed
