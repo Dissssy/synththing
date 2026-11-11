@@ -243,7 +243,7 @@ impl App {
         // to look up.)
         let mut counts = [[0; 4]; 2];
         for album in albums {
-            let counts = &mut counts[usize::from(album.loose)];
+            let counts = &mut counts[usize::from(album.by == matching::By::Recording)];
             let at = if !lookup::wanted(&self.songs, album) {
                 0
             } else {

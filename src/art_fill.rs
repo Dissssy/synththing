@@ -196,7 +196,7 @@ impl Work {
         let now = crate::settings_sync::now();
         for album in lookup::albums(store, ignore) {
             let id = format!("album:{}", album.id);
-            if album.loose || album.artist.is_none() || !self.tried.due(&id, now) {
+            if album.by != crate::lookup::matching::By::Name || album.artist.is_none() || !self.tried.due(&id, now) {
                 continue;
             }
             let keys: Vec<String> = album.songs.iter().map(|s| s.key.clone()).collect();

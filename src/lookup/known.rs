@@ -19,7 +19,7 @@ use super::{Kept, details};
 const SAME_TITLE: f64 = 0.9;
 /// The longest a gap can be between two songs coming in for them to have
 /// come in together, in one import (seconds).
-const BATCH_GAP: i64 = 10 * 60;
+pub(super) const BATCH_GAP: i64 = 10 * 60;
 
 /// The tracks of `release` (by index) that none of `on_it` (the songs
 /// matched to it) is: by its recording, or by its disc and place.
