@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Changed
+- The seek bar covers only the part of a song that plays: for a song with a start or stop time (Song info > Options), it runs from its start time to its stop time, and the times beside it count from its start time.
+
 ### Fixed
 - Android: the app no longer stops responding, and then shows only a grey screen, when Android closes its window in the background (swiping it away from recent apps, closing the mini player, or Android reclaiming it).
 

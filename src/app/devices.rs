@@ -455,7 +455,7 @@ fn song_ui(ui: &mut egui::Ui, player: &Player, seeking: &mut Option<Seek>, now: 
         let waiting = held.is_some_and(|s| s.sent.is_some());
         let mut position = held.map_or_else(|| player.position(now), |s| s.at);
         ui.spacing_mut().slider_width = 160.0;
-        let bar = ui.add_enabled_ui(!waiting, |ui| seek_bar_ui(ui, &mut position, song.length, None)).inner;
+        let bar = ui.add_enabled_ui(!waiting, |ui| seek_bar_ui(ui, &mut position, 0.0..=song.length, None)).inner;
         if bar.dragged() {
             *seeking = Some(Seek { device: id.clone(), at: position, sent: None });
         }

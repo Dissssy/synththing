@@ -70,6 +70,21 @@ impl App {
         self.send_volume();
     }
 
+    /// The part of the playing song that plays, in song seconds: from its
+    /// start time to its stop time, else its whole length. What the seek
+    /// bar covers.
+    pub(super) fn played_span(&self, view: &EngineView) -> (f64, f64) {
+        let whole = (0.0, view.length);
+        // (Until the song sent is the one playing, the view's another's.)
+        if view.loads < self.song_loads {
+            return whole;
+        }
+        let Some(facts) = self.playing_facts() else { return whole };
+        let start = facts.number(Field::StartTime).unwrap_or(0.0).clamp(0.0, view.length);
+        let stop = facts.number(Field::StopTime).filter(|&s| s > 0.0).map_or(view.length, |s| s.min(view.length));
+        if stop > start { (start, stop) } else { whole }
+    }
+
     /// Keep up with the playing song: where it is (to remember), and its
     /// stop time (it ends there, as at its end).
     pub(super) fn song_options_tick(&mut self, view: &EngineView) {

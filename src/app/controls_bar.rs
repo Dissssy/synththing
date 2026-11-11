@@ -102,16 +102,18 @@ impl App {
         ui.add_space(6.0);
     }
 
-    /// The seek bar, between the time it's at and the song's length.
+    /// The seek bar, between the time it's at and how long the song plays
+    /// (over the part between its start and stop times, `played_span`).
     pub(super) fn seek_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let accent = self.transport_accent(ui.ctx(), view);
+        let (start, stop) = self.played_span(view);
         ui.horizontal(|ui| {
-            ui.weak(fmt_time(view.position));
+            ui.weak(fmt_time((view.position - start).max(0.0)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(fmt_time(view.length));
+                ui.weak(fmt_time(stop - start));
                 ui.spacing_mut().slider_width = ui.available_width();
                 let mut position = view.position;
-                if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
+                if seek_bar_ui(ui, &mut position, start..=stop, accent).changed() {
                     self.send(AudioCommand::Seek(position));
                 }
             });
@@ -634,9 +636,14 @@ pub(super) fn shuffle_text(on: bool) -> &'static str {
     if on { "Shuffle: on" } else { "Shuffle: off" }
 }
 
-/// The seek bar over a song `length` seconds long, in `accent` (the
-/// tempo's color) when there is one.
-pub(super) fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, accent: Option<egui::Color32>) -> egui::Response {
+/// The seek bar over `span` (song seconds), in `accent` (the tempo's
+/// color) when there is one.
+pub(super) fn seek_bar_ui(
+    ui: &mut egui::Ui,
+    position: &mut f64,
+    span: std::ops::RangeInclusive<f64>,
+    accent: Option<egui::Color32>,
+) -> egui::Response {
     ui.scope(|ui| {
         let rail_radius = (ui.spacing().slider_rail_height / 2.0) as u8;
         let visuals = ui.visuals_mut();
@@ -653,7 +660,7 @@ pub(super) fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, ac
                 state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
             }
         }
-        ui.add(egui::Slider::new(position, 0.0..=length.max(0.001)).show_value(false).trailing_fill(true))
+        ui.add(egui::Slider::new(position, *span.start()..=span.end().max(span.start() + 0.001)).show_value(false).trailing_fill(true))
     })
     .inner
 }
