@@ -2,7 +2,8 @@
 //! of an album is matched, its release's track list is kept, and songs
 //! on no release whose titles are its missing tracks' (with one more clue
 //! that they're those tracks) are offered in Clean up, a row for each
-//! release, to match to it.
+//! release, to match to it; and the songs that could be one of its tracks,
+//! for a person to pick from (`candidates`).
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -66,6 +67,42 @@ struct Loose<'s> {
     rejected: &'s [String],
 }
 
+impl<'s> Loose<'s> {
+    fn of(key: &'s str, song: &'s song_store::Song, facts: &Facts, batches: &HashMap<&str, usize>) -> Self {
+        let title = facts.text(Field::Title).map_or_else(|| file_stem(&song.name).to_string(), |t| t.into_owned());
+        let numbered = file_tags::number_in_title(&title).map(|(n, _)| n);
+        Loose {
+            key,
+            track: facts.number(Field::Track).map(|n| n as u32).or(numbered),
+            disc: facts.number(Field::Disc).map(|n| n as u32),
+            length: facts.number(Field::Length),
+            batch: batches.get(key).copied(),
+            rejected: song.online.as_ref().map_or(&[][..], |o: &song_store::Online| &o.rejected),
+            title,
+        }
+    }
+}
+
+/// The songs of `store` that could be `release`'s track `t` (by index),
+/// for a person to pick from: those not on it, the likeliest first (by
+/// title, then the other clues `fits_track` takes).
+pub fn candidates(store: &SongStore, release: &Release, t: usize) -> Vec<String> {
+    let batches = batches(store);
+    let on_it: Vec<&str> = store.known().filter(|(_, song)| Facts::of(song).release() == Some(release.id.as_str())).map(|(key, _)| key).collect();
+    let album_batches: Vec<usize> = on_it.iter().filter_map(|k| batches.get(k).copied()).collect();
+    let mut scored: Vec<(f64, &str)> = store
+        .known()
+        .filter(|(key, song)| !store.is_blocked(key) && !super::is_midi(&song.name) && !on_it.contains(key))
+        .map(|(key, song)| {
+            let song = Loose::of(key, song, &Facts::of(song), &batches);
+            let (title, clues) = clues(&song, release, t, &album_batches);
+            (title + 0.1 * clues as f64, key)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then_with(|| a.1.cmp(b.1)));
+    scored.into_iter().map(|(_, key)| key.to_string()).collect()
+}
+
 /// Clean up's On a matched album rows: for each release `kept` that
 /// songs of `store` are matched to, the songs on none whose titles are
 /// its missing tracks', each to its track.
@@ -83,17 +120,7 @@ pub fn suggestions(store: &SongStore, kept: &Kept) -> Vec<Suggestion> {
             on.entry(release).or_default().push(key);
             continue;
         }
-        let title = facts.text(Field::Title).map_or_else(|| file_stem(&song.name).to_string(), |t| t.into_owned());
-        let numbered = file_tags::number_in_title(&title).map(|(n, _)| n);
-        loose.push(Loose {
-            key,
-            track: facts.number(Field::Track).map(|n| n as u32).or(numbered),
-            disc: facts.number(Field::Disc).map(|n| n as u32),
-            length: facts.number(Field::Length),
-            batch: batches.get(key).copied(),
-            rejected: song.online.as_ref().map_or(&[][..], |o: &song_store::Online| &o.rejected),
-            title,
-        });
+        loose.push(Loose::of(key, song, &facts, &batches));
     }
     if loose.is_empty() {
         return Vec::new();
@@ -152,15 +179,20 @@ pub fn suggestions(store: &SongStore, kept: &Kept) -> Vec<Suggestion> {
 /// one more way (its number, its length, or coming in with the songs of
 /// the release here, in `album_batches`).
 fn fits_track(song: &Loose, release: &Release, t: usize, album_batches: &[usize]) -> bool {
+    let (title, clues) = clues(song, release, t, album_batches);
+    title >= SAME_TITLE && clues > 0
+}
+
+/// How alike `song`'s title is to `release`'s track `t`'s (0 to 1), and
+/// in how many other ways it's alike: its number, its length, and coming
+/// in with the songs of the release here (in `album_batches`).
+fn clues(song: &Loose, release: &Release, t: usize, album_batches: &[usize]) -> (f64, usize) {
     let track = &release.tracks[t];
     let title = matching::similar(&song.title, &track.title).max(matching::similar(matching::track_title(&song.title, &release.title), &track.title));
-    if title < SAME_TITLE {
-        return false;
-    }
     let numbered = song.track == Some(track.position) && song.disc.unwrap_or(track.disc) == track.disc;
     let long = song.length.zip(track.length).is_some_and(|(a, b)| (a - b).abs() <= details::LENGTH_LEEWAY);
     let together = song.batch.is_some_and(|b| album_batches.contains(&b));
-    numbered || long || together
+    (title, [numbered, long, together].into_iter().filter(|c| *c).count())
 }
 
 /// A file name without its extension.
