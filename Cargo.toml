@@ -69,7 +69,7 @@ puffin = { git = "https://github.com/EmbarkStudios/puffin", rev = "39c8970abd6a9
 puffin_egui = { git = "https://github.com/EmbarkStudios/puffin", rev = "39c8970abd6a95871bcaf0d3581c494885f2edd5" }
 musicbrainz_rs = { version = "0.14", default-features = false, features = ["sync", "rustls"] }
 strsim = "0.11"
-fs4 = "1.1"                                               # free space on the hub's disk (hub_server.rs)
+fs4 = "1.1"                                               # free space for songs (song_store::room_for)
 ebur128 = "0.1.11"                                        # songs' loudness, to even out their volume (loudness.rs)
 
 # The GUI framework (re-exports egui): on the desktop with its defaults, on

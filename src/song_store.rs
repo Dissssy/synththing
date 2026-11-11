@@ -1105,7 +1105,7 @@ fn write_later(path: PathBuf, text: impl FnOnce() -> serde_json::Result<String> 
     run_later(Box::new(move || {
         let Some(text) = pending().lock().unwrap_or_else(|p| p.into_inner()).remove(&path) else { return };
         let written = match text() {
-            Ok(text) => path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| write_atomically(&path, text.as_bytes())),
+            Ok(text) => path.parent().map_or(Ok(()), std::fs::create_dir_all).and_then(|()| crate::config::write_atomically(&path, text.as_bytes())),
             Err(e) => Err(e.into()),
         };
         if let Err(e) = written {
@@ -1271,7 +1271,7 @@ pub fn write_in(bytes: &[u8], name: &str, dir: &Path) -> Result<Stored> {
     let to = path_of(dir, &key);
     if !to.exists() {
         make_parent(&to)?;
-        write_atomically(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
+        crate::config::write_atomically(&to, bytes).with_context(|| format!("writing {}", to.display()))?;
     }
     Ok(Stored { key, name: name.to_string() })
 }
@@ -1413,7 +1413,7 @@ pub fn import_old(folders: &[PathBuf], dir: &Path, playlists: &Path, extensions:
                 }
             }
         });
-        if changed && let Err(e) = write_atomically(&file, serde_json::to_string_pretty(&playlist).unwrap_or_default().as_bytes()) {
+        if changed && let Err(e) = crate::config::write_atomically(&file, serde_json::to_string_pretty(&playlist).unwrap_or_default().as_bytes()) {
             done.failed.push(format!("{}: {e}", file.display()));
         }
     }
@@ -1452,6 +1452,17 @@ pub fn takes(path: &Path, extensions: &[&str]) -> bool {
 }
 
 /// Whether a file named `name` is one of macOS's AppleDouble files.
+/// Space a library that takes songs in by itself (a hub, programs
+/// through the API) leaves free on its disk, for everything else kept
+/// there: a hosted hub's quota is the songs it was given and this much.
+pub const KEEP_FREE: u64 = 1 << 30;
+
+/// Whether `len` more bytes of songs fit on `dir`'s disk, leaving
+/// `KEEP_FREE`. (A disk that can't say has room.)
+pub fn room_for(dir: &Path, len: u64) -> bool {
+    !fs4::available_space(dir).is_ok_and(|free| free < len.saturating_add(KEEP_FREE))
+}
+
 pub fn is_apple_double(name: &str) -> bool {
     name.starts_with("._")
 }
@@ -1460,12 +1471,6 @@ pub fn has_extension(path: &Path, extensions: &[&str]) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| extensions.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
-fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut temp = path.as_os_str().to_os_string();
-    temp.push(".tmp");
-    std::fs::write(&temp, bytes)?;
-    std::fs::rename(&temp, path)
-}
 
 fn now() -> i64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)

@@ -718,7 +718,7 @@ impl Config {
         let json = self.to_json()?;
         crate::settings_sync::record(&json);
         let json = serde_json::to_string_pretty(&json)?;
-        fs::write(&path, json).with_context(|| format!("writing {}", path.display()))?;
+        write_atomically(&path, json.as_bytes()).with_context(|| format!("writing {}", path.display()))?;
         Ok(())
     }
 
@@ -782,6 +782,19 @@ pub fn stable_config_dir() -> Result<PathBuf> {
 
 /// The song library of the mobile layout (`import.rs`): what's been
 /// imported, in the config folder.
+/// Write `bytes` to `path` through a file beside it, so a full disk or a
+/// crash leaves the old contents rather than half of the new.
+pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    let mut temp = path.as_os_str().to_os_string();
+    temp.push(".tmp");
+    let temp = PathBuf::from(temp);
+    let written = fs::write(&temp, bytes).and_then(|()| fs::rename(&temp, path));
+    if written.is_err() {
+        let _ = fs::remove_file(&temp);
+    }
+    written
+}
+
 pub fn music_dir() -> Result<PathBuf> {
     Ok(config_dir()?.join("music"))
 }
@@ -942,6 +955,22 @@ pub fn nice_name(path: &Path) -> String {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn write_atomically_replaces_the_file_and_leaves_nothing_beside_it() {
+        let dir = std::env::temp_dir().join(format!("synththing-atomic-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("a.json");
+        fs::write(&path, "old").unwrap();
+        write_atomically(&path, b"new").unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), "new");
+        assert_eq!(fs::read_dir(&dir).unwrap().count(), 1);
+        // (Into a folder that isn't there: fails, the temporary file gone too.)
+        assert!(write_atomically(&dir.join("missing").join("b.json"), b"x").is_err());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
     use super::*;
 
     /// A config from before `remember` existed starts remembering everything

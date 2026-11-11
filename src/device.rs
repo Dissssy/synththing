@@ -54,7 +54,7 @@ impl Device {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
         }
-        std::fs::write(path, serde_json::to_string_pretty(self)?)?;
+        crate::config::write_atomically(&path, serde_json::to_string_pretty(self)?.as_bytes())?;
         Ok(())
     }
 }

@@ -168,7 +168,7 @@ impl Wishlist {
     fn changed(&mut self) {
         self.revision += 1;
         let Some(path) = &self.path else { return };
-        if let Err(e) = serde_json::to_vec(&self.wishes).map_err(anyhow::Error::from).and_then(|b| Ok(std::fs::write(path, b)?)) {
+        if let Err(e) = serde_json::to_vec(&self.wishes).map_err(anyhow::Error::from).and_then(|b| Ok(crate::config::write_atomically(path, &b)?)) {
             log::warn!("couldn't save {}: {e}", path.display());
         }
     }

@@ -78,6 +78,9 @@ const EVENTS: [&str; 10] = [
 const MOST_SONGS: usize = 500;
 /// The largest song a program can send (as the relay's limit).
 const LARGEST_SONG: usize = 250 << 20;
+/// What a program is told when the library has no room for a song
+/// (`song_store::room_for`).
+const FULL: &str = "there's no room for more songs: remove some first";
 
 /// The API's preferences (`Config::api`), kept on this device only.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -1365,7 +1368,14 @@ fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &Has
         Ok(sent) => sent,
         Err(reply) => return reply,
     };
-    let stored = match crate::config::music_dir().and_then(|dir| song_store::write_in(&bytes, &name, &dir)) {
+    let dir = match crate::config::music_dir() {
+        Ok(dir) => dir,
+        Err(e) => return error(500, format!("couldn't store the song: {e:#}")),
+    };
+    if !song_store::room_for(&dir, bytes.len() as u64) {
+        return error(507, FULL);
+    }
+    let stored = match song_store::write_in(&bytes, &name, &dir) {
         Ok(stored) => stored,
         Err(e) => return error(500, format!("couldn't store the song: {e:#}")),
     };
@@ -1457,6 +1467,10 @@ fn stage_song(shared: &Shared, request: &mut Request, query: &HashMap<String, St
         Ok(sent) => sent,
         Err(reply) => return reply,
     };
+    // (Staged songs go into the library's folder once imported.)
+    if crate::config::music_dir().is_ok_and(|dir| !song_store::room_for(&dir, bytes.len() as u64)) {
+        return error(507, FULL);
+    }
     let library = match ask(shared, Call::Library) {
         Ok(library) => library,
         Err(reply) => return reply,
