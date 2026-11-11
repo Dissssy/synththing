@@ -2,6 +2,7 @@
 //! speed, the soundfont and status line, laid out to fold when narrow.
 
 use eframe::egui;
+use std::ops::RangeInclusive;
 
 use crate::applog;
 use crate::commands::{self, Command};
@@ -419,10 +420,11 @@ impl App {
     /// Volume: an icon, a slider (`slider_width` wide) and its value.
     pub(super) fn volume_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_sized([SPEAKER_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(icon(speaker_icon(self.volume))).size(16.0))).on_hover_text("Volume");
-        if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
+        let slider = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
+        let entry = ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], volume_entry(&mut self.volume));
+        if slider.changed() || entry.changed() {
             self.send_volume();
         }
-        ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
     }
 
     /// Volume as a button, when the bar has no room for its slider: it
@@ -430,8 +432,9 @@ impl App {
     pub(super) fn volume_button_ui(&mut self, ui: &mut egui::Ui) {
         let button = ui.add(icon_button(speaker_icon(self.volume))).on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0));
         bar_popup(&button, |ui| {
-            ui.weak(format!("{:.0}%", self.volume * 100.0));
-            if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).vertical().show_value(false)).changed() {
+            let entry = ui.add(volume_entry(&mut self.volume));
+            let slider = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).vertical().show_value(false));
+            if entry.changed() || slider.changed() {
                 self.send_volume();
             }
         });
@@ -443,9 +446,10 @@ impl App {
     pub(super) fn speed_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let button = ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text(format!("Speed: {:.2}x", view.speed));
         bar_popup(&button, |ui| {
-            ui.weak(format!("{:.2}x", view.speed));
             let mut speed = view.speed;
-            if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).vertical().show_value(false)).changed() {
+            let entry = ui.add(speed_entry(&mut speed));
+            let slider = ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).vertical().show_value(false));
+            if entry.changed() || slider.changed() {
                 self.send(AudioCommand::SetSpeed(speed));
             }
             if ui.add_enabled(view.speed != 1.0, egui::Button::new("1x")).on_hover_text("Back to normal speed").clicked() {
@@ -460,11 +464,61 @@ impl App {
             self.send(AudioCommand::SetSpeed(1.0));
         }
         let mut speed = view.speed;
-        if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
+        let slider = ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false));
+        let entry = ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], speed_entry(&mut speed));
+        if slider.changed() || entry.changed() {
             self.send(AudioCommand::SetSpeed(speed));
         }
-        ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
     }
+}
+
+/// A slider's value beside it, read and set through `get_set` (as
+/// `egui::DragValue::from_get_set`): drag it to nudge the value `step` a
+/// point, or click it and type an exact one, applied on Enter so that a
+/// half-typed number never plays. It shows as many of `decimals` decimals
+/// as the value needs, then `suffix`, which may be typed too.
+fn value_entry<'a>(get_set: impl 'a + FnMut(Option<f64>) -> f64, range: RangeInclusive<f64>, step: f64, decimals: RangeInclusive<usize>, suffix: &'static str) -> egui::DragValue<'a> {
+    egui::DragValue::from_get_set(get_set)
+        .range(range)
+        .speed(step)
+        .min_decimals(*decimals.start())
+        .max_decimals(*decimals.end())
+        .suffix(suffix)
+        .update_while_editing(false)
+        .custom_parser(move |text| text.trim().trim_end_matches(suffix).trim().parse().ok())
+}
+
+/// Speed's value (`value_entry`), to 1/10,000x: fine enough to hit a
+/// tuning such as A=432 Hz (0.9818x).
+fn speed_entry(speed: &mut f64) -> egui::DragValue<'_> {
+    value_entry(
+        move |set| {
+            if let Some(value) = set {
+                *speed = value;
+            }
+            *speed
+        },
+        MIN_SPEED..=MAX_SPEED,
+        0.005,
+        2..=4,
+        "x",
+    )
+}
+
+/// Volume's value (`value_entry`), in whole percent.
+fn volume_entry(volume: &mut f32) -> egui::DragValue<'_> {
+    value_entry(
+        move |set| {
+            if let Some(percent) = set {
+                *volume = (percent / 100.0) as f32;
+            }
+            f64::from(*volume) * 100.0
+        },
+        0.0..=100.0,
+        0.5,
+        0..=0,
+        "%",
+    )
 }
 
 /// How wide volume and speed's sliders get in the controls bar.
@@ -475,9 +529,9 @@ pub(super) const MAX_SLIDER: f32 = 160.0;
 /// How tall a slider is in a controls bar popup (`bar_popup`).
 pub(super) const POPUP_SLIDER: f32 = 120.0;
 
-pub(super) const VOLUME_TEXT_WIDTH: f32 = 36.0;
+pub(super) const VOLUME_TEXT_WIDTH: f32 = 44.0;
 
-pub(super) const SPEED_TEXT_WIDTH: f32 = 40.0;
+pub(super) const SPEED_TEXT_WIDTH: f32 = 56.0;
 
 pub(super) const SPEAKER_WIDTH: f32 = 20.0;
 

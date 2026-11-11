@@ -8,6 +8,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 - The seek bar covers only the part of a song that plays: for a song with a start or stop time (Song info > Options), it runs from its start time to its stop time, and the times beside it count from its start time. To see the whole song with those times marked on it instead, pick Whole song, marked under Preferences > Appearance > Seek bar > Start and stop times.
 
 ### Added
+- Type in an exact playback speed or volume: click the value beside the speed or volume slider in the controls bar (or above it, when the bar is narrow) and type, say, 0.9818 for A=432 Hz tuning, then press Enter. Speed shows up to 4 decimals. Dragging the value nudges it.
 - Themes now set every color in the app: new colors for things done ("Saved ..." in the status line and its messages, lines added, "Listening"), synththing's own things in the online library, shadows, and the script editor's code (keywords, functions, strings, numbers, comments). Warnings and errors everywhere, the log included, follow the theme's colors.
 
 ### Changed
