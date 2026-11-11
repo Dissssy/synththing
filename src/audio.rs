@@ -62,10 +62,11 @@ pub enum AudioCommand {
     Seek(f64),
     SeekRelative(f64),
     SetSpeed(f64),
-    /// The song, its name, and whether it starts paused (a script asked
-    /// for that with `script_options`).
-    LoadMidi(Arc<MidiFile>, String, bool),
-    LoadAudioFile(Arc<DecodedAudio>, String, bool),
+    /// The song, its name, whether it starts paused (a script asked for
+    /// that with `script_options`), and its gain (as `SetSongGain`), so its
+    /// first blocks never render at the song before's.
+    LoadMidi(Arc<MidiFile>, String, bool, f32),
+    LoadAudioFile(Arc<DecodedAudio>, String, bool, f32),
     SetSoundFont(Arc<SoundFont>, String),
     SetChannelEnabled(u8, bool),
     EnableAllChannels,
@@ -423,11 +424,13 @@ impl AudioEngine {
                 self.flush_now();
             }
             AudioCommand::SetSpeed(speed) => self.engine.set_speed(speed),
-            AudioCommand::LoadMidi(midi, name, paused) => {
+            AudioCommand::LoadMidi(midi, name, paused, gain) => {
+                self.song_gain = gain.clamp(0.0, MAX_SONG_GAIN);
                 self.engine.load_midi(midi, name, paused);
                 self.flush_now();
             }
-            AudioCommand::LoadAudioFile(data, name, paused) => {
+            AudioCommand::LoadAudioFile(data, name, paused, gain) => {
+                self.song_gain = gain.clamp(0.0, MAX_SONG_GAIN);
                 self.engine.load_audio_file(data, name, paused);
                 self.flush_now();
             }

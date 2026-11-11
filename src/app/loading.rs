@@ -242,9 +242,10 @@ impl App {
             script_running && (self.script.options().start_paused || self.recording.loads_paused());
         // (Counted before it's sent: the song's playing once it's loaded.)
         let loads = self.shared.lock().map(|s| s.view.loads).unwrap_or_default() + 1;
+        let gain = self.song_gain(&path);
         match song {
             Asset::Midi(midi) => {
-                self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused));
+                self.send(AudioCommand::LoadMidi(midi.file, name.clone(), paused, gain));
                 self.song_for_script(&path, midi.notes, midi.song_id);
                 self.status = match sf_error {
                     Some(e) => format!("Playing {name}, but its soundfont didn't load: {e}"),
@@ -254,7 +255,7 @@ impl App {
                 };
             }
             Asset::Audio(audio) => {
-                self.send(AudioCommand::LoadAudioFile(audio.clone(), name.clone(), paused));
+                self.send(AudioCommand::LoadAudioFile(audio.clone(), name.clone(), paused, gain));
                 self.song_for_script(&path, Default::default(), audio.song_id.clone());
                 self.status =
                     if paused { format!("Loaded {name}; the script starts it.") } else { format!("Playing: {name}") };

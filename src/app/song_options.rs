@@ -5,6 +5,8 @@
 //! (Skipping when shuffling is the play order's: `song_list::Rules`,
 //! `pick_next`.)
 
+use std::path::Path;
+
 use super::App;
 use crate::audio::AudioCommand;
 use crate::engine::EngineView;
@@ -32,25 +34,31 @@ impl App {
         self.current_song.as_deref().and_then(|p| self.songs.get(p)).map(Facts::of)
     }
 
-    /// Set the output volume: the slider's, and the playing song's: its
-    /// adjust, over what evens out its volume (once it's known how loud
-    /// it is).
+    /// Set the output volume: the slider's, and the playing song's gain.
     pub(super) fn send_volume(&self) {
-        let facts = self.playing_facts();
+        self.send(AudioCommand::SetVolume(self.volume));
+        if let Some(path) = self.current_song.as_deref() {
+            self.send(AudioCommand::SetSongGain(self.song_gain(path)));
+        }
+    }
+
+    /// A song's gain: its adjust, over what evens out its volume (once
+    /// it's known how loud it is). Sent with the song when it loads, so its
+    /// first moments don't play at the song before's gain.
+    pub(super) fn song_gain(&self, path: &Path) -> f32 {
+        let facts = self.songs.get(path).map(Facts::of);
         let adjust = facts.and_then(|f| f.number(Field::VolumeAdjust)).unwrap_or(0.0);
-        let loudness = if self.config.album_volume { self.album_loudness() } else { facts.and_then(|f| f.loudness()) };
+        let loudness = if self.config.album_volume { self.album_loudness(path) } else { facts.and_then(|f| f.loudness()) };
         let evened = loudness
             .filter(|_| self.config.even_volume.unwrap_or(true))
             .map_or(1.0, |l| loudness::gain(l, self.config.volume_target.unwrap_or(loudness::DEFAULT_TARGET)));
-        self.send(AudioCommand::SetVolume(self.volume));
-        self.send(AudioCommand::SetSongGain((1.0 + adjust as f32 / 100.0) * evened));
+        (1.0 + adjust as f32 / 100.0) * evened
     }
 
-    /// How loud the playing song's album is: as its ReplayGain tags say,
-    /// else from how loud its songs here are (those known), else (on no
-    /// album) the song itself.
-    fn album_loudness(&self) -> Option<Loudness> {
-        let path = self.current_song.as_deref()?;
+    /// How loud a song's album is: as its ReplayGain tags say, else from
+    /// how loud its songs here are (those known), else (on no album) the
+    /// song itself.
+    fn album_loudness(&self, path: &Path) -> Option<Loudness> {
         let (key, song) = (self.songs.key(path)?, self.songs.get(path)?);
         if let Some(tagged) = song.meta.as_ref().and_then(|m| m.album_replay_gain) {
             return Some(tagged);
@@ -65,20 +73,16 @@ impl App {
     }
 
     /// The song just sent to play: from where it was left, else its start
-    /// time, at its volume.
+    /// time. (Its gain went with it: `song_gain`.)
     pub(super) fn song_options_loaded(&mut self) {
         self.playing_at = None;
         // (A preview from Song info plays from where it asked.)
         let previewed = self.seek_on_load.take().filter(|(path, _)| self.current_song.as_ref() == Some(path)).map(|(_, at)| at);
-        let Some(facts) = self.playing_facts() else {
-            self.send_volume();
-            return;
-        };
+        let Some(facts) = self.playing_facts() else { return };
         let left = self.current_song.as_deref().and_then(|p| self.songs.get(p)).and_then(|s| s.position).filter(|_| facts.flag(Field::RememberPosition));
         if let Some(at) = previewed.or(left).or_else(|| facts.number(Field::StartTime)).filter(|&at| at > 0.0) {
             self.send(AudioCommand::Seek(at));
         }
-        self.send_volume();
     }
 
     /// What the seek bar shows of the song in the engine's view. For a
