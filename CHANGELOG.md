@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Wishlist: a broom button on the Got it heading takes every wish that came true off the wishlist at once (click it twice to confirm).
+
 ### Fixed
 - Seeking in a MIDI song is instant now, even far into a long one. It used to play the whole song silently up to the new spot first, which could freeze playback for a long while.
 - Android: the app no longer stops responding, and then shows only a grey screen, when Android closes its window in the background (swiping it away from recent apps, closing the mini player, or Android reclaiming it).
