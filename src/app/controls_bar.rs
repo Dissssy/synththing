@@ -2,6 +2,7 @@
 //! speed, the soundfont and status line, laid out to fold when narrow.
 
 use eframe::egui;
+use std::ops::RangeInclusive;
 
 use crate::applog;
 use crate::commands::{self, Command};
@@ -13,7 +14,7 @@ use crate::select_list;
 use crate::lua_visualizer;
 use crate::playlist::LoopMode;
 
-use super::{App, editor, fmt_time, icon, icon_button, on_color, palette_color, playback_state_text, tags, toast};
+use super::{App, editor, fmt_time, icon, icon_button, on_color, playback_state_text, tags, toast};
 
 impl App {
     /// The seek bar's color: the tempo's (`tempo_color`), easing toward a
@@ -102,16 +103,18 @@ impl App {
         ui.add_space(6.0);
     }
 
-    /// The seek bar, between the time it's at and the song's length.
+    /// The seek bar, between the time it's at and how long the song plays
+    /// (`seek_shown`).
     pub(super) fn seek_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let accent = self.transport_accent(ui.ctx(), view);
+        let shown = self.seek_shown(view);
         ui.horizontal(|ui| {
-            ui.weak(fmt_time(view.position));
+            ui.weak(fmt_time(shown.at));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(fmt_time(view.length));
+                ui.weak(fmt_time(shown.length));
                 ui.spacing_mut().slider_width = ui.available_width();
                 let mut position = view.position;
-                if seek_bar_ui(ui, &mut position, view.length, accent).changed() {
+                if seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed() {
                     self.send(AudioCommand::Seek(position));
                 }
             });
@@ -417,10 +420,11 @@ impl App {
     /// Volume: an icon, a slider (`slider_width` wide) and its value.
     pub(super) fn volume_ui(&mut self, ui: &mut egui::Ui) {
         ui.add_sized([SPEAKER_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(icon(speaker_icon(self.volume))).size(16.0))).on_hover_text("Volume");
-        if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false)).changed() {
+        let slider = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false));
+        let entry = ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], volume_entry(&mut self.volume));
+        if slider.changed() || entry.changed() {
             self.send_volume();
         }
-        ui.add_sized([VOLUME_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.0}%", self.volume * 100.0)).weak()));
     }
 
     /// Volume as a button, when the bar has no room for its slider: it
@@ -428,8 +432,9 @@ impl App {
     pub(super) fn volume_button_ui(&mut self, ui: &mut egui::Ui) {
         let button = ui.add(icon_button(speaker_icon(self.volume))).on_hover_text(format!("Volume: {:.0}%", self.volume * 100.0));
         bar_popup(&button, |ui| {
-            ui.weak(format!("{:.0}%", self.volume * 100.0));
-            if ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).vertical().show_value(false)).changed() {
+            let entry = ui.add(volume_entry(&mut self.volume));
+            let slider = ui.add(egui::Slider::new(&mut self.volume, 0.0..=1.0).vertical().show_value(false));
+            if entry.changed() || slider.changed() {
                 self.send_volume();
             }
         });
@@ -441,9 +446,10 @@ impl App {
     pub(super) fn speed_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let button = ui.add(icon_button("gauge").selected(view.speed != 1.0)).on_hover_text(format!("Speed: {:.2}x", view.speed));
         bar_popup(&button, |ui| {
-            ui.weak(format!("{:.2}x", view.speed));
             let mut speed = view.speed;
-            if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).vertical().show_value(false)).changed() {
+            let entry = ui.add(speed_entry(&mut speed));
+            let slider = ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).vertical().show_value(false));
+            if entry.changed() || slider.changed() {
                 self.send(AudioCommand::SetSpeed(speed));
             }
             if ui.add_enabled(view.speed != 1.0, egui::Button::new("1x")).on_hover_text("Back to normal speed").clicked() {
@@ -458,11 +464,61 @@ impl App {
             self.send(AudioCommand::SetSpeed(1.0));
         }
         let mut speed = view.speed;
-        if ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false)).changed() {
+        let slider = ui.add(egui::Slider::new(&mut speed, MIN_SPEED..=MAX_SPEED).show_value(false));
+        let entry = ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], speed_entry(&mut speed));
+        if slider.changed() || entry.changed() {
             self.send(AudioCommand::SetSpeed(speed));
         }
-        ui.add_sized([SPEED_TEXT_WIDTH, TRANSPORT_HEIGHT], egui::Label::new(egui::RichText::new(format!("{:.2}x", view.speed)).weak()));
     }
+}
+
+/// A slider's value beside it, read and set through `get_set` (as
+/// `egui::DragValue::from_get_set`): drag it to nudge the value `step` a
+/// point, or click it and type an exact one, applied on Enter so that a
+/// half-typed number never plays. It shows as many of `decimals` decimals
+/// as the value needs, then `suffix`, which may be typed too.
+fn value_entry<'a>(get_set: impl 'a + FnMut(Option<f64>) -> f64, range: RangeInclusive<f64>, step: f64, decimals: RangeInclusive<usize>, suffix: &'static str) -> egui::DragValue<'a> {
+    egui::DragValue::from_get_set(get_set)
+        .range(range)
+        .speed(step)
+        .min_decimals(*decimals.start())
+        .max_decimals(*decimals.end())
+        .suffix(suffix)
+        .update_while_editing(false)
+        .custom_parser(move |text| text.trim().trim_end_matches(suffix).trim().parse().ok())
+}
+
+/// Speed's value (`value_entry`), to 1/10,000x: fine enough to hit a
+/// tuning such as A=432 Hz (0.9818x).
+fn speed_entry(speed: &mut f64) -> egui::DragValue<'_> {
+    value_entry(
+        move |set| {
+            if let Some(value) = set {
+                *speed = value;
+            }
+            *speed
+        },
+        MIN_SPEED..=MAX_SPEED,
+        0.005,
+        2..=4,
+        "x",
+    )
+}
+
+/// Volume's value (`value_entry`), in whole percent.
+fn volume_entry(volume: &mut f32) -> egui::DragValue<'_> {
+    value_entry(
+        move |set| {
+            if let Some(percent) = set {
+                *volume = (percent / 100.0) as f32;
+            }
+            f64::from(*volume) * 100.0
+        },
+        0.0..=100.0,
+        0.5,
+        0..=0,
+        "%",
+    )
 }
 
 /// How wide volume and speed's sliders get in the controls bar.
@@ -473,9 +529,9 @@ pub(super) const MAX_SLIDER: f32 = 160.0;
 /// How tall a slider is in a controls bar popup (`bar_popup`).
 pub(super) const POPUP_SLIDER: f32 = 120.0;
 
-pub(super) const VOLUME_TEXT_WIDTH: f32 = 36.0;
+pub(super) const VOLUME_TEXT_WIDTH: f32 = 44.0;
 
-pub(super) const SPEED_TEXT_WIDTH: f32 = 40.0;
+pub(super) const SPEED_TEXT_WIDTH: f32 = 56.0;
 
 pub(super) const SPEAKER_WIDTH: f32 = 20.0;
 
@@ -614,7 +670,7 @@ pub(crate) fn play_button(ctx: &egui::Context, paused: bool, icon_size: f32, siz
     if paused {
         return egui::Button::new(egui::RichText::new(icon("play")).size(icon_size)).min_size(size);
     }
-    let color = crate::theme::playing_color(ctx);
+    let color = crate::theme::palette(ctx).playing.0;
     egui::Button::new(egui::RichText::new(icon("pause")).size(icon_size).color(color))
         .min_size(size)
         .fill(color.gamma_multiply(0.15))
@@ -634,10 +690,19 @@ pub(super) fn shuffle_text(on: bool) -> &'static str {
     if on { "Shuffle: on" } else { "Shuffle: off" }
 }
 
-/// The seek bar over a song `length` seconds long, in `accent` (the
-/// tempo's color) when there is one.
-pub(super) fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, accent: Option<egui::Color32>) -> egui::Response {
+/// The seek bar over `span` (song seconds), in `accent` (the tempo's
+/// color) when there is one, with `marks` (a start and stop time) marked
+/// across its rail.
+pub(super) fn seek_bar_ui(
+    ui: &mut egui::Ui,
+    position: &mut f64,
+    span: std::ops::RangeInclusive<f64>,
+    marks: Option<(f64, f64)>,
+    accent: Option<egui::Color32>,
+) -> egui::Response {
     ui.scope(|ui| {
+        // (Under the slider: the rail and handle drawn over each mark.)
+        let under = ui.painter().add(egui::Shape::Noop);
         let rail_radius = (ui.spacing().slider_rail_height / 2.0) as u8;
         let visuals = ui.visuals_mut();
         // egui runs the filled part past the handle by the rail's corner
@@ -653,7 +718,25 @@ pub(super) fn seek_bar_ui(ui: &mut egui::Ui, position: &mut f64, length: f64, ac
                 state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
             }
         }
-        ui.add(egui::Slider::new(position, 0.0..=length.max(0.001)).show_value(false).trailing_fill(true))
+        let (from, to) = (*span.start(), span.end().max(span.start() + 0.001));
+        let response = ui.add(egui::Slider::new(position, from..=to).show_value(false).trailing_fill(true));
+        if let Some((start, stop)) = marks {
+            // (Where egui puts a value along the slider: its handle's
+            // center stays a handle's half width in from either end.)
+            let rect = response.rect;
+            let inset = rect.height() / 2.5
+                * match ui.visuals().handle_shape {
+                    egui::style::HandleShape::Circle => 1.0,
+                    egui::style::HandleShape::Rect { aspect_ratio } => aspect_ratio,
+                };
+            let x = |t: f64| rect.left() + inset + (rect.width() - 2.0 * inset) * ((t - from) / (to - from)).clamp(0.0, 1.0) as f32;
+            let stroke = egui::Stroke::new(2.0, ui.visuals().text_color());
+            let half = rect.height() * 0.35;
+            let ticks = [start, stop]
+                .map(|t| egui::Shape::line_segment([egui::pos2(x(t), rect.center().y - half), egui::pos2(x(t), rect.center().y + half)], stroke));
+            ui.painter().set(under, egui::Shape::Vec(ticks.into()));
+        }
+        response
     })
     .inner
 }
@@ -676,15 +759,9 @@ pub(super) fn tempo_color(bpm: f64) -> [f32; 3] {
 /// The status line's color, by what it says: red for something that
 /// failed ("Couldn't ...", "Failed to ..."), green for something done
 /// ("Saved ...", "Installed ..."), none (grey) for anything else.
-pub(super) fn status_color(visuals: &egui::Visuals, status: &str) -> Option<egui::Color32> {
-    match status_outcome(status)? {
-        false => Some(visuals.error_fg_color),
-        true => {
-            // (The palette's green, darker on a light theme so it reads.)
-            let green = palette_color(2);
-            Some(if visuals.dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
-        }
-    }
+pub(super) fn status_color(ctx: &egui::Context, status: &str) -> Option<egui::Color32> {
+    let palette = crate::theme::palette(ctx);
+    Some(if status_outcome(status)? { palette.success.0 } else { palette.error.0 })
 }
 
 /// Whether a status says something failed (`Some(false)`), was done
@@ -744,7 +821,7 @@ pub(super) fn status_line_ui(
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for entry in &recent {
                     ui.horizontal_wrapped(|ui| {
-                        match status_color(ui.visuals(), &entry.message) {
+                        match status_color(ui.ctx(), &entry.message) {
                             Some(color) => ui.colored_label(color, &entry.message),
                             None => ui.label(&entry.message),
                         };
@@ -762,7 +839,7 @@ pub(super) fn status_line_ui(
     if shown {
         *unseen_failure = false;
     }
-    let text = match status_color(ui.visuals(), status) {
+    let text = match status_color(ui.ctx(), status) {
         Some(color) => egui::RichText::new(status).color(color),
         None => egui::RichText::new(status).weak(),
     };

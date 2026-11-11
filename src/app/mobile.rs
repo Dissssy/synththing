@@ -454,7 +454,7 @@ impl App {
         let failed = status_outcome(text) == Some(false);
         let least = if failed { FAILURE_TOAST } else { TOAST };
         let least = least.max(Duration::from_secs_f32(text.len() as f32 / READING_SPEED));
-        let color = status_color(&ctx.global_style().visuals, text);
+        let color = status_color(ctx, text);
         let (anchor, offset) = (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0));
         if super::toast::draw(ctx, "status_toast", anchor, offset, text, color, *since, least) {
             self.mobile_state.toast = None;
@@ -469,12 +469,13 @@ impl App {
         // The seek bar, edge to edge: the line between the visualizer and
         // the controls. In the tempo's color, as on the desktop.
         let accent = self.transport_accent(ui.ctx(), view);
+        let shown = self.seek_shown(view);
         let mut position = view.position;
         let changed = ui
             .scope(|ui| {
                 ui.spacing_mut().slider_width = ui.available_width();
                 ui.spacing_mut().interact_size.y = 28.0;
-                super::seek_bar_ui(ui, &mut position, view.length, accent).changed()
+                super::seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed()
             })
             .inner;
         if changed {
@@ -482,7 +483,7 @@ impl App {
         }
 
         ui.horizontal(|ui| {
-            ui.monospace(format!("{} / {}", fmt_time(view.position), fmt_time(view.length)));
+            ui.monospace(format!("{} / {}", fmt_time(shown.at), fmt_time(shown.length)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(big_icon_button("caret-down", 32.0)).on_hover_text("Fold the controls away").clicked() {
                     self.mobile_state.collapsed = true;

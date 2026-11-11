@@ -151,7 +151,6 @@ struct UpdateDraft {
 }
 
 /// Official scripts' author, and what hovering it says.
-pub(super) const OFFICIAL_GOLD: egui::Color32 = egui::Color32::from_rgb(230, 180, 60);
 pub(super) const OFFICIAL_HOVER: &str = "Official: one of the scripts that come with synththing, published by its makers";
 
 /// How long typing pauses before a slug is looked up.
@@ -326,8 +325,8 @@ fn diff_ui(ui: &mut egui::Ui, diff: &[(Change, String)]) {
         }
         let (mark, color) = match change {
             Change::Same => (" ", ui.visuals().weak_text_color()),
-            Change::Removed => ("-", egui::Color32::from_rgb(220, 90, 90)),
-            Change::Added => ("+", egui::Color32::from_rgb(90, 190, 110)),
+            Change::Removed => ("-", ui.visuals().error_fg_color),
+            Change::Added => ("+", crate::theme::palette(ui.ctx()).success.0),
         };
         ui.label(egui::RichText::new(format!("{mark} {line}")).font(font.clone()).color(color));
     }
@@ -1141,7 +1140,7 @@ impl App {
                             ui.weak("by");
                             // An official script's author in gold.
                             let author = egui::RichText::new(&s.author_name);
-                            ui.label(if official { author.color(OFFICIAL_GOLD) } else { author.weak() });
+                            ui.label(if official { author.color(crate::theme::palette(ui.ctx()).official.0) } else { author.weak() });
                             ui.weak(format!("·  {} encore{}", s.encores, if s.encores == 1 { "" } else { "s" }));
                         });
                     });
@@ -1194,7 +1193,7 @@ impl App {
         ui.horizontal_wrapped(|ui| {
             ui.label("by");
             if s.author_id.as_deref() == Some(official_id.as_str()) {
-                ui.label(egui::RichText::new(&s.author_name).strong().color(OFFICIAL_GOLD)).on_hover_text(OFFICIAL_HOVER);
+                ui.label(egui::RichText::new(&s.author_name).strong().color(crate::theme::palette(ui.ctx()).official.0)).on_hover_text(OFFICIAL_HOVER);
             } else {
                 ui.label(&s.author_name);
             }
@@ -2121,7 +2120,7 @@ impl App {
                         super::status_pill(
                             ui,
                             if syncing { "Syncing" } else { "Sync off" },
-                            if syncing { crate::theme::playing_color(ui.ctx()) } else { ui.visuals().weak_text_color() },
+                            if syncing { crate::theme::palette(ui.ctx()).playing.0 } else { ui.visuals().weak_text_color() },
                         );
                     });
                     if current.is_some() {
