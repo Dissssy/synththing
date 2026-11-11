@@ -111,6 +111,19 @@ struct Track {
     wish: Option<crate::wishlist::Wish>,
 }
 
+/// The open group's page rows, and what they were made from: the songs'
+/// and wishlist's revisions, the ruleset and the group as it was then.
+/// (The group itself counts, not just the revisions: the groups come
+/// from another thread, so for a while after the songs change the group
+/// is still the one from before them.)
+struct Page {
+    revision: (u64, u64),
+    ruleset: String,
+    key: String,
+    songs: Vec<String>,
+    tracks: Arc<Vec<Track>>,
+}
+
 /// The Groupings' state, for the session.
 #[derive(Default)]
 pub(super) struct Groupings {
@@ -118,9 +131,8 @@ pub(super) struct Groupings {
     shown: Option<String>,
     views: HashMap<String, RulesetView>,
     pub(super) art: AlbumArt,
-    /// The open group's songs, and what they were made from (the songs'
-    /// revision, the ruleset and the group).
-    page: Option<((u64, u64), String, String, Arc<Vec<Track>>)>,
+    /// The open group's page rows, and what they were made from.
+    page: Option<Page>,
     /// The playlists as groups, and the fingerprint of the playlists
     /// they were made from.
     playlists: Option<(u64, Arc<Vec<Group>>)>,
@@ -885,15 +897,16 @@ impl App {
     }
 
     /// The songs of `group` as its page lists them, made again when the
-    /// songs or the wishlist change.
+    /// songs, the wishlist or the group change.
     fn group_tracks(&mut self, id: &str, group: &Group) -> Arc<Vec<Track>> {
         let revision = (self.songs_revision(), self.wishlist.list.revision());
-        if let Some((seen, ruleset, key, tracks)) = &self.groupings.page
-            && *seen == revision
-            && ruleset == id
-            && *key == group.key
+        if let Some(page) = &self.groupings.page
+            && page.revision == revision
+            && page.ruleset == id
+            && page.key == group.key
+            && page.songs == group.songs
         {
-            return tracks.clone();
+            return page.tracks.clone();
         }
         let naming = naming(&self.config, &self.songs);
         let cache = &mut self.song_info;
@@ -924,7 +937,7 @@ impl App {
             })
             .collect();
         let tracks = Arc::new(self.with_missing(id, group, tracks));
-        self.groupings.page = Some((revision, id.to_string(), group.key.clone(), tracks.clone()));
+        self.groupings.page = Some(Page { revision, ruleset: id.to_string(), key: group.key.clone(), songs: group.songs.clone(), tracks: tracks.clone() });
         tracks
     }
 
