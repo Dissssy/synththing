@@ -4,7 +4,6 @@
 use eframe::egui;
 
 use crate::lua_docs;
-use crate::lua_visualizer;
 
 use super::{ICON_SIZE, mobile};
 
@@ -454,12 +453,6 @@ pub(crate) fn on_color(color: egui::Color32) -> egui::Color32 {
     let [r, g, b, _] = color.to_array();
     let light = 0.2126 * f32::from(r) + 0.7152 * f32::from(g) + 0.0722 * f32::from(b) > 140.0;
     if light { egui::Color32::BLACK } else { egui::Color32::WHITE }
-}
-
-/// A color of the channel palette (`lua_visualizer::default_channel_color`).
-pub(crate) fn palette_color(index: u8) -> egui::Color32 {
-    let [r, g, b] = lua_visualizer::default_channel_color(index);
-    egui::Color32::from_rgb(r, g, b)
 }
 
 /// `color` with most of its color taken out and pushed toward the theme's

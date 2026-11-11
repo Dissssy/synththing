@@ -105,13 +105,13 @@ impl App {
             _ => None,
         };
         let accent = ui.visuals().selection.stroke.color;
-        let test_color = egui::Color32::from_rgb(224, 180, 104);
-        let error_color = egui::Color32::from_rgb(220, 90, 90);
+        let test_color = ui.visuals().warn_fg_color;
+        let error_color = ui.visuals().error_fg_color;
         let (badge, badge_color) = match &state {
             UpdateState::Idle | UpdateState::Checking => ("arrows-clockwise", accent),
-            UpdateState::UpToDate => ("check-circle", crate::theme::playing_color(ui.ctx())),
+            UpdateState::UpToDate => ("check-circle", crate::theme::palette(ui.ctx()).playing.0),
             UpdateState::Available(_) | UpdateState::Downloading { .. } => ("download-simple", accent),
-            UpdateState::Installed(_) => ("check-circle", crate::theme::playing_color(ui.ctx())),
+            UpdateState::Installed(_) => ("check-circle", crate::theme::palette(ui.ctx()).playing.0),
             UpdateState::Gone => ("git-branch", test_color),
             UpdateState::Failed(_) => ("warning", error_color),
         };
@@ -449,7 +449,7 @@ impl App {
                     });
                 }
                 crate::channels::InstallState::Failed(error) => {
-                    setting_row(ui, |ui| ui.colored_label(egui::Color32::from_rgb(220, 90, 90), error));
+                    setting_row(ui, |ui| ui.colored_label(ui.visuals().error_fg_color, error));
                 }
             }
         });

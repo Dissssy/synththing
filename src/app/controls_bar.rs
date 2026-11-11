@@ -13,7 +13,7 @@ use crate::select_list;
 use crate::lua_visualizer;
 use crate::playlist::LoopMode;
 
-use super::{App, editor, fmt_time, icon, icon_button, on_color, palette_color, playback_state_text, tags, toast};
+use super::{App, editor, fmt_time, icon, icon_button, on_color, playback_state_text, tags, toast};
 
 impl App {
     /// The seek bar's color: the tempo's (`tempo_color`), easing toward a
@@ -616,7 +616,7 @@ pub(crate) fn play_button(ctx: &egui::Context, paused: bool, icon_size: f32, siz
     if paused {
         return egui::Button::new(egui::RichText::new(icon("play")).size(icon_size)).min_size(size);
     }
-    let color = crate::theme::playing_color(ctx);
+    let color = crate::theme::palette(ctx).playing.0;
     egui::Button::new(egui::RichText::new(icon("pause")).size(icon_size).color(color))
         .min_size(size)
         .fill(color.gamma_multiply(0.15))
@@ -705,15 +705,9 @@ pub(super) fn tempo_color(bpm: f64) -> [f32; 3] {
 /// The status line's color, by what it says: red for something that
 /// failed ("Couldn't ...", "Failed to ..."), green for something done
 /// ("Saved ...", "Installed ..."), none (grey) for anything else.
-pub(super) fn status_color(visuals: &egui::Visuals, status: &str) -> Option<egui::Color32> {
-    match status_outcome(status)? {
-        false => Some(visuals.error_fg_color),
-        true => {
-            // (The palette's green, darker on a light theme so it reads.)
-            let green = palette_color(2);
-            Some(if visuals.dark_mode { green } else { green.gamma_multiply(0.55).to_opaque() })
-        }
-    }
+pub(super) fn status_color(ctx: &egui::Context, status: &str) -> Option<egui::Color32> {
+    let palette = crate::theme::palette(ctx);
+    Some(if status_outcome(status)? { palette.success.0 } else { palette.error.0 })
 }
 
 /// Whether a status says something failed (`Some(false)`), was done
@@ -773,7 +767,7 @@ pub(super) fn status_line_ui(
             egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                 for entry in &recent {
                     ui.horizontal_wrapped(|ui| {
-                        match status_color(ui.visuals(), &entry.message) {
+                        match status_color(ui.ctx(), &entry.message) {
                             Some(color) => ui.colored_label(color, &entry.message),
                             None => ui.label(&entry.message),
                         };
@@ -791,7 +785,7 @@ pub(super) fn status_line_ui(
     if shown {
         *unseen_failure = false;
     }
-    let text = match status_color(ui.visuals(), status) {
+    let text = match status_color(ui.ctx(), status) {
         Some(color) => egui::RichText::new(status).color(color),
         None => egui::RichText::new(status).weak(),
     };

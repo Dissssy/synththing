@@ -68,7 +68,7 @@ fn icon_picker(ui: &mut egui::Ui, picked: &mut Option<String>, default: &str) {
 /// theme's star color until one's picked) and icon, how many there are,
 /// and back to the usual look.
 fn star_row(ui: &mut egui::Ui, star: &mut StarLook, count: usize) {
-    let [r, g, b, _] = crate::theme::star_color(ui.ctx()).to_srgba_unmultiplied();
+    let [r, g, b, _] = crate::theme::palette(ui.ctx()).star.0.to_srgba_unmultiplied();
     let mut color = star.color.unwrap_or([r, g, b]);
     if ui.color_edit_button_srgb(&mut color).on_hover_text("Starred songs' color (until you pick one: the theme's star color)").changed() {
         star.color = Some(color);

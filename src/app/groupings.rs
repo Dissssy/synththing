@@ -1300,7 +1300,7 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     let pick = !touch && ui.input(|i| i.modifiers.command || i.modifiers.shift);
     let mut output = RowOutput { picked: response.clicked() && pick, play: response.clicked() && !pick && !response.double_clicked(), ..RowOutput::default() };
     let visuals = ui.style().interact_selectable(&response, picked);
-    let playing_color = crate::theme::playing_color(ui.ctx());
+    let playing_color = crate::theme::palette(ui.ctx()).playing.0;
     select_list::paint_row(ui, rect, &response, idx, picked, playing, track.here);
     if response.drag_started() {
         response.dnd_set_drag_payload(DraggedFiles { paths: vec![track.path.clone()], label: track.name.clone() });

@@ -343,7 +343,7 @@ fn show_list<T>(
     let row_height = height.max(row_height(ui));
     let sense = if touch { egui::Sense::click() } else { egui::Sense::click_and_drag() };
     let modifiers = ui.input(|i| i.modifiers);
-    let playing_color = crate::theme::playing_color(ui.ctx());
+    let playing_color = crate::theme::palette(ui.ctx()).playing.0;
 
     // The keys, when this is the list in front. Rows are drawn only where
     // they're in view, so bringing the cursor's row into view is done by
@@ -536,7 +536,7 @@ pub fn paint_row(ui: &egui::Ui, rect: egui::Rect, response: &egui::Response, idx
     let hovered = hovers && response.hovered();
     let marked = playing && !selected && !hovered;
     let visuals = ui.style().interact_selectable(response, selected);
-    let playing_color = crate::theme::playing_color(ui.ctx());
+    let playing_color = crate::theme::palette(ui.ctx()).playing.0;
     if marked {
         ui.painter().rect_filled(rect, visuals.corner_radius, playing_color.gamma_multiply(0.15));
     } else if selected || hovered {
@@ -782,7 +782,7 @@ pub fn star_icon(ctx: &egui::Context) -> &'static str {
 
 /// The color starred songs are marked in: the user's own, or the theme's.
 pub fn star_color(ctx: &egui::Context) -> egui::Color32 {
-    star_look(ctx).0.unwrap_or_else(|| crate::theme::star_color(ctx))
+    star_look(ctx).0.unwrap_or_else(|| crate::theme::palette(ctx).star.0)
 }
 
 /// How wide a song's star is, at the left of its row.
