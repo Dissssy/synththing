@@ -56,6 +56,8 @@ const PORT: u16 = 7390;
 const RETRY: Duration = Duration::from_secs(30);
 /// How often the server checks that its addresses work from the internet.
 const CHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
+/// How often it looks whether it has room for more songs.
+const ROOM_EVERY: Duration = Duration::from_secs(10);
 /// What a device sends the hub, as a live message, to have it check its
 /// addresses from the internet again (its sync settings' Check again).
 pub const CHECK_TOPIC: &str = "hub check";
@@ -139,6 +141,7 @@ pub fn run() -> i32 {
     let mut error = None;
     let mut checked: Option<Instant> = None;
     let checks = mpsc::channel();
+    let (mut full, mut roomed): (bool, Option<Instant>) = (false, None);
     // (Ticked every `TICK`: nothing to wake.)
     let mut jobs = background::Jobs::new(|| ());
     loop {
@@ -210,6 +213,19 @@ pub fn run() -> i32 {
         // (For the other devices to show.)
         while let Ok(checked) = checks.1.try_recv() {
             sync.hub_checks(checked);
+        }
+        if serving.is_some() && roomed.is_none_or(|t| t.elapsed() >= ROOM_EVERY) {
+            roomed = Some(Instant::now());
+            let now_full = hub_server::full(songs.dir());
+            if now_full != full {
+                full = now_full;
+                if full {
+                    log::warn!("the hub is full: it takes no more songs until some are removed or it's given more room");
+                } else {
+                    log::info!("the hub has room for songs again");
+                }
+                sync.hub_full(full);
+            }
         }
         match sync.hub() {
             Some(hub) if hub.device == device.id => named = true,
@@ -355,7 +371,7 @@ fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &De
     } else {
         log::info!("serving songs on port {port}, for your devices at {}", addrs.join(", "));
     }
-    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs, checks: Vec::new() };
+    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs, checks: Vec::new(), full: false };
     Ok((server, came, leaf))
 }
 

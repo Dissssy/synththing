@@ -1046,9 +1046,12 @@ impl DeviceSync {
     fn songs_now(&mut self, link: &Link, here: &Here) -> Box<songs::Songs> {
         let _timing = crate::frame_timing::scope("songs for the sync worker");
         let Device { id: device, name: device_name } = self.device.get_or_insert_with(Device::load).clone();
+        // (A full hub wants no songs: none go to it, nor wait on the relay
+        // for it.)
+        let full = self.hub_offer.as_ref().is_some_and(|(leaf, _)| leaf.full);
         let wants = song_sync::Wants {
-            starred: settings_sync::syncs(&self.choices, &settings_sync::STARRED_SONGS),
-            every: settings_sync::syncs(&self.choices, &settings_sync::EVERY_SONG),
+            starred: !full && settings_sync::syncs(&self.choices, &settings_sync::STARRED_SONGS),
+            every: !full && settings_sync::syncs(&self.choices, &settings_sync::EVERY_SONG),
         };
         if self.syncing(Blob::Transfers) && !self.held() {
             self.listen_for_songs(link, here.songs, &device);
@@ -1057,7 +1060,7 @@ impl DeviceSync {
         let hub_offer = self.hub_offer.clone();
         Box::new(songs::Songs {
             store: here.songs.clone(),
-            listed: song_sync::listed(here.songs, here.playlists),
+            listed: if full { Vec::new() } else { song_sync::listed(here.songs, here.playlists) },
             wants,
             device,
             device_name,
@@ -1199,6 +1202,17 @@ impl DeviceSync {
         }
     }
 
+    /// Whether this hub has room for more songs (`hub_server::full`): while
+    /// it hasn't, it wants none, and says so for the other devices.
+    pub fn hub_full(&mut self, full: bool) {
+        if let Some((leaf, _)) = &mut self.hub_offer
+            && leaf.full != full
+        {
+            leaf.full = full;
+            self.songs_dirty = true;
+        }
+    }
+
     /// Check whether this device reaches the hub directly now, not when it's
     /// next due.
     pub fn check_hub_now(&mut self) {
@@ -1308,7 +1322,8 @@ impl DeviceSync {
                     self.moves_paused = Some(Instant::now() + RETRY);
                 }
                 Moved::Sent(_) | Moved::Gone(_) => self.ask_worker(songs::Request::Moved(moved.clone())),
-                Moved::Streamed { key, to } | Moved::Elsewhere { key, to } => {
+                // (Not sent to a full hub again while it still wants it.)
+                Moved::Streamed { key, to } | Moved::Elsewhere { key, to } | Moved::HubFull { key, to } => {
                     self.given.insert(song_sync::want(to, key), Instant::now());
                 }
                 Moved::TooBig(key) => {

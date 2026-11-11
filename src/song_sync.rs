@@ -250,6 +250,10 @@ pub struct HubLeaf {
     /// found (`hub.rs`: those on a network of their own aren't checked).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub checks: Vec<AddressCheck>,
+    /// It has no room for more songs (`hub_server::full`): it wants none
+    /// until it has.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub full: bool,
 }
 
 impl HubLeaf {
@@ -450,6 +454,9 @@ pub enum Moved {
     /// The hub couldn't be reached directly after all (why): the relay
     /// goes on in its place.
     HubLost(String),
+    /// The hub (`to`) has no room for it: it stays here, not sent around
+    /// the hub through the relay (the hub stops wanting songs while full).
+    HubFull { key: String, to: String },
 }
 
 /// The relay's room, as a device sending songs knows it.
@@ -536,6 +543,7 @@ pub fn run_all(relay: &Relay, tasks: &[Task], room: Room, mut done: impl FnMut(M
                     streamed = match client::hub_put(&reached.base, &reached.key, identity, &relay.device, &relay.sync_key, key, &file) {
                         Ok(client::HubPut::Taken) => Some(Moved::Streamed { key: key.clone(), to: reached.device }),
                         Ok(client::HubPut::Has | client::HubPut::Busy) => Some(Moved::Elsewhere { key: key.clone(), to: reached.device }),
+                        Ok(client::HubPut::Full) => Some(Moved::HubFull { key: key.clone(), to: reached.device }),
                         // (Through the relay, then: the hub listens there.)
                         Err(e) => {
                             hub = None;
@@ -640,7 +648,8 @@ pub fn after(mut leaves: BTreeMap<String, Value>, moved: &Moved) -> BTreeMap<Str
         | Moved::Full(_)
         | Moved::TooBig(_)
         | Moved::Elsewhere { .. }
-        | Moved::HubLost(_) => {}
+        | Moved::HubLost(_)
+        | Moved::HubFull { .. } => {}
     }
     leaves
 }

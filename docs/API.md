@@ -20,7 +20,7 @@ Where a header can't be set (a browser's `EventSource`), add `?token=st_...` to 
 
 ## Requests
 
-Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (something's missing from the request), 401 (no or unknown token), 403 (the token isn't allowed that), 404, 409 (the command can't run right now), 413 (a song over 250 MB), 415 (a file synththing can't play), 500 (the song couldn't be stored) or 503 (synththing didn't answer within 5 seconds, is closing, or already has 32 event streams open).
+Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (something's missing from the request), 401 (no or unknown token), 403 (the token isn't allowed that), 404, 409 (the command can't run right now), 413 (a song over 250 MB), 415 (a file synththing can't play), 500 (the song couldn't be stored), 507 (no room for the song: it would leave under 1 GB free on the library's disk) or 503 (synththing didn't answer within 5 seconds, is closing, or already has 32 event streams open).
 
 | Request | Needs | What it gives |
 | --- | --- | --- |

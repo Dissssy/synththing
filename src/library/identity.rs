@@ -114,7 +114,7 @@ pub fn save_rotations(rotations: &[Rotation]) -> Result<(), String> {
         let _ = std::fs::remove_file(&path);
         return Ok(());
     }
-    std::fs::write(&path, serde_json::to_string_pretty(rotations).unwrap_or_default())
+    crate::config::write_atomically(&path, serde_json::to_string_pretty(rotations).unwrap_or_default().as_bytes())
         .map_err(|e| format!("couldn't write {}: {e}", path.display()))
 }
 
@@ -284,7 +284,7 @@ pub fn save_secret(path: &Path, text: &str) -> Result<(), String> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
     }
-    std::fs::write(path, text).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
+    crate::config::write_atomically(path, text.as_bytes()).map_err(|e| format!("couldn't write {}: {e}", path.display()))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;

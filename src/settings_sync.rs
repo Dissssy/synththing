@@ -324,7 +324,7 @@ impl State {
     pub fn save(&self, name: &str) -> Result<(), String> {
         let _timing = crate::frame_timing::scope("sync state save");
         let path = path(name).ok_or("no config folder")?;
-        std::fs::write(&path, serde_json::to_string(self).unwrap_or_default())
+        crate::config::write_atomically(&path, serde_json::to_string(self).unwrap_or_default().as_bytes())
             .map_err(|e| format!("couldn't write {}: {e}", path.display()))
     }
 

@@ -570,6 +570,8 @@ pub enum HubPut {
     Has,
     /// Another device is sending it now.
     Busy,
+    /// It has no room for it.
+    Full,
 }
 
 /// Send the song at `file` (as `key`) to the hub, sealed with the sync key.
@@ -578,6 +580,7 @@ pub fn hub_put(base: &str, hub_key: &str, identity: &Identity, device: &str, syn
     match response.status().as_u16() {
         200 => Ok(HubPut::Has),
         409 => Ok(HubPut::Busy),
+        507 => Ok(HubPut::Full),
         _ => check(Ok(response)).map(|_| HubPut::Taken),
     }
 }

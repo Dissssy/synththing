@@ -185,7 +185,7 @@ impl Library {
         let json = serde_json::to_string_pretty(&saved)?;
         fs::create_dir_all(&self.dir).with_context(|| format!("creating {}", self.dir.display()))?;
         let file = self.file(&stored.id);
-        fs::write(&file, json).with_context(|| format!("writing {}", file.display()))
+        crate::config::write_atomically(&file, json.as_bytes()).with_context(|| format!("writing {}", file.display()))
     }
 
     pub fn delete(&mut self, idx: usize) -> Result<()> {

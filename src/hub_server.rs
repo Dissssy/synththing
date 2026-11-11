@@ -11,7 +11,7 @@
 //! - `PUT /hub/v1/songs/{key}`: a song, sealed. Kept only if it's the song
 //!   (its hash is its key). 200 if the hub has it already, 409 while
 //!   another device sends it (so devices split what they send between
-//!   them), 507 when its disk is nearly full.
+//!   them), 507 when it doesn't fit (`song_store::room_for`).
 //! - `POST /hub/v1/songs/{key}/get`: the song, sealed (404: not here).
 //! - `POST /hub/v1/live`: a live message (`device_messages.rs`), sealed,
 //!   for the user's devices: passed to those listening here, and to the
@@ -38,8 +38,9 @@ use crate::song_store::{self, Incoming};
 
 /// Requests handled at once.
 const WORKERS: usize = 8;
-/// Songs aren't taken in below this much free space (bytes).
-const FREE_FLOOR: u64 = 2 * 1024 * 1024 * 1024;
+/// The hub is full once a song this big (bytes: as big as the relay and
+/// the API take) wouldn't fit: it stops wanting songs then (`hub.rs`).
+const FULL_AT: u64 = 256 << 20;
 const CHALLENGE_MAX: usize = 128;
 /// Devices listening for live messages at once, at most.
 const MOST_LISTENING: usize = 32;
@@ -206,6 +207,11 @@ fn hello(shared: &Shared, query: &str) -> Response<std::io::Cursor<Vec<u8>>> {
     )
 }
 
+/// Whether the hub's songs in `dir` are full (`FULL_AT`).
+pub fn full(dir: &std::path::Path) -> bool {
+    !song_store::room_for(dir, FULL_AT)
+}
+
 /// Whether `request` is signed by the identity, for this hub, now, and not
 /// seen before.
 fn signed(shared: &Shared, request: &Request, method: &str, path: &str) -> Result<(), Response<std::io::Cursor<Vec<u8>>>> {
@@ -259,9 +265,9 @@ fn take(shared: &Shared, request: &mut Request, key: &str) -> Response<std::io::
         return error(409, "another device is sending it");
     }
     let _coming = Coming(shared, key.to_string());
-    if fs4::available_space(&shared.dir).is_ok_and(|free| free < FREE_FLOOR) {
-        log::warn!("not taking a song: under 2 GB left on the disk at {}", shared.dir.display());
-        return error(507, "the hub's disk is nearly full");
+    if !song_store::room_for(&shared.dir, request.body_length().unwrap_or_default() as u64) {
+        log::warn!("not taking a song: it doesn't fit at {}", shared.dir.display());
+        return error(507, "the hub is full");
     }
     let mut incoming = match Incoming::new(key, &shared.dir) {
         Ok(incoming) => incoming,
@@ -386,7 +392,7 @@ mod tests {
         // It proves it's this hub; another key isn't it.
         client::hub_hello(&base, &key, true).unwrap();
         assert!(client::hub_hello(&base, &Identity::generate().unwrap().public(), true).is_err());
-        let leaf = HubLeaf { device: "hub".into(), key: key.clone(), addrs: vec!["http://127.0.0.1:9".into(), base.clone()], checks: Vec::new() };
+        let leaf = HubLeaf { device: "hub".into(), key: key.clone(), addrs: vec!["http://127.0.0.1:9".into(), base.clone()], checks: Vec::new(), full: false };
         let reached = song_sync::reach(&leaf).unwrap();
         assert_eq!(reached, Hub { device: "hub".into(), base: base.clone(), key: key.clone() }, "the next address, the first not answering");
 
