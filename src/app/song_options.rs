@@ -16,6 +16,17 @@ use crate::lookup;
 /// song starts from its start again.
 const POSITION_MARGIN: f64 = 5.0;
 
+/// The seek bar for the playing song (`App::seek_shown`).
+pub(super) struct SeekShown {
+    /// What the bar covers, in song seconds.
+    pub span: std::ops::RangeInclusive<f64>,
+    /// The start and stop times to mark on it.
+    pub marks: Option<(f64, f64)>,
+    /// The times beside it: where the song is, and how long it plays.
+    pub at: f64,
+    pub length: f64,
+}
+
 impl App {
     pub(super) fn playing_facts(&self) -> Option<Facts<'_>> {
         self.current_song.as_deref().and_then(|p| self.songs.get(p)).map(Facts::of)
@@ -70,19 +81,30 @@ impl App {
         self.send_volume();
     }
 
-    /// The part of the playing song that plays, in song seconds: from its
-    /// start time to its stop time, else its whole length. What the seek
-    /// bar covers.
-    pub(super) fn played_span(&self, view: &EngineView) -> (f64, f64) {
-        let whole = (0.0, view.length);
-        // (Until the song sent is the one playing, the view's another's.)
-        if view.loads < self.song_loads {
-            return whole;
+    /// What the seek bar shows of the song in the engine's view. For a
+    /// song with a start or stop time: only the part between them, its
+    /// times counted from its start time, else (Preferences: marked) the
+    /// whole song with them marked.
+    pub(super) fn seek_shown(&mut self, view: &EngineView) -> SeekShown {
+        // (Until the song sent is the one playing, the view's the song
+        // before's: its times, not the new one's.)
+        if view.loads >= self.song_loads {
+            self.trim_in_view = self.playing_facts().and_then(|facts| {
+                let start = facts.number(Field::StartTime).unwrap_or(0.0).clamp(0.0, view.length);
+                let stop = facts.number(Field::StopTime).filter(|&s| s > 0.0).map_or(view.length, |s| s.min(view.length));
+                (stop > start && (start > 0.0 || stop < view.length)).then_some((start, stop))
+            });
         }
-        let Some(facts) = self.playing_facts() else { return whole };
-        let start = facts.number(Field::StartTime).unwrap_or(0.0).clamp(0.0, view.length);
-        let stop = facts.number(Field::StopTime).filter(|&s| s > 0.0).map_or(view.length, |s| s.min(view.length));
-        if stop > start { (start, stop) } else { whole }
+        match self.trim_in_view {
+            Some((start, stop)) if !self.config.seek_bar_marks => SeekShown {
+                span: start..=stop,
+                marks: None,
+                // (Just loaded, it's at 0 until it's sent to its start.)
+                at: view.position.clamp(start, stop) - start,
+                length: stop - start,
+            },
+            marks => SeekShown { span: 0.0..=view.length, marks, at: view.position, length: view.length },
+        }
     }
 
     /// Keep up with the playing song: where it is (to remember), and its

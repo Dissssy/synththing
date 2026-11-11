@@ -469,13 +469,13 @@ impl App {
         // The seek bar, edge to edge: the line between the visualizer and
         // the controls. In the tempo's color, as on the desktop.
         let accent = self.transport_accent(ui.ctx(), view);
-        let (start, stop) = self.played_span(view);
+        let shown = self.seek_shown(view);
         let mut position = view.position;
         let changed = ui
             .scope(|ui| {
                 ui.spacing_mut().slider_width = ui.available_width();
                 ui.spacing_mut().interact_size.y = 28.0;
-                super::seek_bar_ui(ui, &mut position, start..=stop, accent).changed()
+                super::seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed()
             })
             .inner;
         if changed {
@@ -483,7 +483,7 @@ impl App {
         }
 
         ui.horizontal(|ui| {
-            ui.monospace(format!("{} / {}", fmt_time((view.position - start).max(0.0)), fmt_time(stop - start)));
+            ui.monospace(format!("{} / {}", fmt_time(shown.at), fmt_time(shown.length)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui.add(big_icon_button("caret-down", 32.0)).on_hover_text("Fold the controls away").clicked() {
                     self.mobile_state.collapsed = true;

@@ -499,6 +499,10 @@ pub struct App {
     /// The engine's generation (`EngineView::generation`) the current song
     /// last got to its stop time in, so it's acted on once.
     stopped_in: Option<u64>,
+    /// The start and stop times of the song in the engine's view, as of
+    /// the last view that was the current song's (`None`: it plays whole):
+    /// for the seek bar while the view is still the song before's.
+    trim_in_view: Option<(f64, f64)>,
     /// Where to start the song at this path once it's loaded, over its own
     /// start: a preview from Song info's Options.
     seek_on_load: Option<(PathBuf, f64)>,
@@ -814,6 +818,7 @@ impl App {
             playing_at: None,
             listening: Default::default(),
             stopped_in: None,
+            trim_in_view: None,
             seek_on_load: None,
             rng: Rng::from_time(),
             playlist_rename: None,

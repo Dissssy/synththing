@@ -103,17 +103,17 @@ impl App {
     }
 
     /// The seek bar, between the time it's at and how long the song plays
-    /// (over the part between its start and stop times, `played_span`).
+    /// (`seek_shown`).
     pub(super) fn seek_line_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
         let accent = self.transport_accent(ui.ctx(), view);
-        let (start, stop) = self.played_span(view);
+        let shown = self.seek_shown(view);
         ui.horizontal(|ui| {
-            ui.weak(fmt_time((view.position - start).max(0.0)));
+            ui.weak(fmt_time(shown.at));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.weak(fmt_time(stop - start));
+                ui.weak(fmt_time(shown.length));
                 ui.spacing_mut().slider_width = ui.available_width();
                 let mut position = view.position;
-                if seek_bar_ui(ui, &mut position, start..=stop, accent).changed() {
+                if seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed() {
                     self.send(AudioCommand::Seek(position));
                 }
             });
@@ -637,14 +637,18 @@ pub(super) fn shuffle_text(on: bool) -> &'static str {
 }
 
 /// The seek bar over `span` (song seconds), in `accent` (the tempo's
-/// color) when there is one.
+/// color) when there is one, with `marks` (a start and stop time) marked
+/// across its rail.
 pub(super) fn seek_bar_ui(
     ui: &mut egui::Ui,
     position: &mut f64,
     span: std::ops::RangeInclusive<f64>,
+    marks: Option<(f64, f64)>,
     accent: Option<egui::Color32>,
 ) -> egui::Response {
     ui.scope(|ui| {
+        // (Under the slider: the rail and handle drawn over each mark.)
+        let under = ui.painter().add(egui::Shape::Noop);
         let rail_radius = (ui.spacing().slider_rail_height / 2.0) as u8;
         let visuals = ui.visuals_mut();
         // egui runs the filled part past the handle by the rail's corner
@@ -660,7 +664,25 @@ pub(super) fn seek_bar_ui(
                 state.fg_stroke = egui::Stroke::new(1.5, on_color(accent));
             }
         }
-        ui.add(egui::Slider::new(position, *span.start()..=span.end().max(span.start() + 0.001)).show_value(false).trailing_fill(true))
+        let (from, to) = (*span.start(), span.end().max(span.start() + 0.001));
+        let response = ui.add(egui::Slider::new(position, from..=to).show_value(false).trailing_fill(true));
+        if let Some((start, stop)) = marks {
+            // (Where egui puts a value along the slider: its handle's
+            // center stays a handle's half width in from either end.)
+            let rect = response.rect;
+            let inset = rect.height() / 2.5
+                * match ui.visuals().handle_shape {
+                    egui::style::HandleShape::Circle => 1.0,
+                    egui::style::HandleShape::Rect { aspect_ratio } => aspect_ratio,
+                };
+            let x = |t: f64| rect.left() + inset + (rect.width() - 2.0 * inset) * ((t - from) / (to - from)).clamp(0.0, 1.0) as f32;
+            let stroke = egui::Stroke::new(2.0, ui.visuals().text_color());
+            let half = rect.height() * 0.35;
+            let ticks = [start, stop]
+                .map(|t| egui::Shape::line_segment([egui::pos2(x(t), rect.center().y - half), egui::pos2(x(t), rect.center().y + half)], stroke));
+            ui.painter().set(under, egui::Shape::Vec(ticks.into()));
+        }
+        response
     })
     .inner
 }
