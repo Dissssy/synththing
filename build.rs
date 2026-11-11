@@ -16,6 +16,11 @@
 //! `$OUT_DIR/icon_32.rgba` for the tray (`tray.rs`) and `$OUT_DIR/icon_256.png`
 //! for the Linux applications menu (`desktop_entry.rs`).
 //!
+//! And `$OUT_DIR/changelog_fragments.rs`: `CHANGELOG_FRAGMENTS`, every
+//! change waiting for the next release in `changelog.d/` as (file name,
+//! contents), sorted by name, so a build shows them under Unreleased
+//! (`src/changelog.rs`).
+//!
 //! And `$OUT_DIR/log_lines.rs`: `LOG_LINES`, every `log::error!`,
 //! `log::warn!` and `log::info!` in `src/` as (module, line, format
 //! string), sorted, so usage data (`src/usage.rs`) can send a line's
@@ -77,6 +82,7 @@ fn main() {
         .unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
 
     generate_reference(&manifest_dir, &out_dir);
+    generate_changelog_fragments(&manifest_dir, &out_dir);
     generate_log_lines(&manifest_dir, &out_dir);
     let channel = stamp_build();
     // Local: built anywhere but GitHub Actions (which sets it for CI and
@@ -455,6 +461,30 @@ fn parse_reference(text: &str) -> Result<Vec<(String, Vec<Block>)>, String> {
 /// The module is the file's (`src/library/sync.rs` is
 /// `synththing::library::sync`); calls in inline modules (`mod tests`) get
 /// their file's, so they're never looked up, which is fine.
+/// `changelog.d/*.md` but its README, the changes the next release brings.
+fn generate_changelog_fragments(manifest_dir: &str, out_dir: &str) {
+    let dir = Path::new(manifest_dir).join("changelog.d");
+    println!("cargo:rerun-if-changed={}", dir.display());
+    let mut fragments: Vec<(String, String)> = fs::read_dir(&dir)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", dir.display()))
+        .map(|entry| entry.expect("reading changelog.d").path())
+        .filter(|path| path.extension().is_some_and(|e| e == "md") && path.file_name().is_some_and(|n| n != "README.md"))
+        .map(|path| {
+            let name = path.file_name().unwrap().to_string_lossy().into_owned();
+            let contents = fs::read_to_string(&path).unwrap_or_else(|e| panic!("reading {}: {e}", path.display())).replace("\r\n", "\n");
+            (name, contents)
+        })
+        .collect();
+    fragments.sort();
+    let mut generated = String::from("pub static CHANGELOG_FRAGMENTS: &[(&str, &str)] = &[\n");
+    for (name, contents) in fragments {
+        generated.push_str(&format!("    ({name:?}, {contents:?}),\n"));
+    }
+    generated.push_str("];\n");
+    let out_path = Path::new(out_dir).join("changelog_fragments.rs");
+    fs::write(&out_path, generated).unwrap_or_else(|e| panic!("writing {}: {e}", out_path.display()));
+}
+
 fn generate_log_lines(manifest_dir: &str, out_dir: &str) {
     println!("cargo:rerun-if-changed=src");
     let src = Path::new(manifest_dir).join("src");

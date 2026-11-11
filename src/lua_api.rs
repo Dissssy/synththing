@@ -15,7 +15,7 @@
 //!
 //! `since` is the release a name first shipped in. Something new gets
 //! `"next"` until it ships: cargo-release writes the version in when it
-//! makes the release (`release.toml`), like the changelog's Unreleased.
+//! makes the release (`release.toml`), as it gathers `changelog.d/`.
 //! Types are LuaLS's (`number`, `integer`, `string`, `boolean`, `any`,
 //! `table`, a class below, `X[]` for a list, `A|B` for either).
 
