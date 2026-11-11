@@ -407,6 +407,7 @@ impl App {
         let mut warn_heavy = self.config.warn_heavy_midi.unwrap_or(true);
         let mut beat_pulse = self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE) * 100.0;
         let mut pulse_length = self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH) * 100.0;
+        let mut seek_bar_marks = self.config.seek_bar_marks;
         let mut script_log = self.config.script_log_to_app;
         let mut visualizer_scale = config::visualizer_scale_down(self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE));
         let mut channel_toggles = self.config.channel_toggles;
@@ -473,6 +474,22 @@ impl App {
                                 label | setting_slider(ui, egui::Slider::new(&mut pulse_length, 10.0..=100.0).suffix("%").fixed_decimals(0), 0.0)
                             })
                             .inner
+                        },
+                    );
+                    with_info(
+                        ui,
+                        "For a song with a start or stop time (Song info > Options): Only the part that plays \
+                         covers just the part between them, its times counted from its start time; Whole song, \
+                         marked covers all of it, with a line across the bar at each.",
+                        |ui| {
+                            let label = setting_label(ui, "Start and stop times");
+                            let text = |marks: bool| if marks { "Whole song, marked" } else { "Only the part that plays" };
+                            let combo = setting_combo(ui, "seek_bar_marks", 0.0).selected_text(text(seek_bar_marks)).show_ui(ui, |ui| {
+                                for marks in [false, true] {
+                                    ui.selectable_value(&mut seek_bar_marks, marks, text(marks));
+                                }
+                            });
+                            label | combo.response
                         },
                     );
                 });
@@ -912,6 +929,7 @@ impl App {
             || graphics_backend != self.config.graphics_backend
             || (beat_pulse / 100.0 - self.config.beat_pulse.unwrap_or(config::DEFAULT_BEAT_PULSE)).abs() > 1e-4
             || (pulse_length / 100.0 - self.config.beat_pulse_length.unwrap_or(config::DEFAULT_BEAT_PULSE_LENGTH)).abs() > 1e-4
+            || seek_bar_marks != self.config.seek_bar_marks
             || script_log != self.config.script_log_to_app
             || visualizer_scale != self.config.visualizer_scale.unwrap_or(config::DEFAULT_VISUALIZER_SCALE)
             || channel_toggles != self.config.channel_toggles
@@ -947,6 +965,7 @@ impl App {
             self.config.channel_toggles = channel_toggles;
             self.config.controls_bar = controls_bar;
             self.config.mini_controls = mini_controls;
+            self.config.seek_bar_marks = seek_bar_marks;
             self.config.script_log_to_app = script_log;
             self.config.visualizer_scale = (visualizer_scale != config::DEFAULT_VISUALIZER_SCALE).then_some(visualizer_scale);
             self.config.warn_heavy_midi = (!warn_heavy).then_some(false);

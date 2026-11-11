@@ -74,6 +74,11 @@ pub struct Config {
     /// the beat, 0.1 to 1 (`None`: `DEFAULT_BEAT_PULSE_LENGTH`).
     #[serde(default)]
     pub beat_pulse_length: Option<f32>,
+    /// Preference: for a song with a start or stop time, the seek bar
+    /// covers the whole song with those times marked on it, over covering
+    /// only the part between them.
+    #[serde(default)]
+    pub seek_bar_marks: bool,
     /// Preference: closing the window hides it to the tray (`Some(true)`)
     /// or quits (`Some(false)`); `None` until the first close asks.
     #[serde(default)]
