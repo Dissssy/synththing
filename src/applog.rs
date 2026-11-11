@@ -50,6 +50,15 @@ struct Logger {
 
 static LOGGER: OnceLock<Logger> = OnceLock::new();
 
+/// Library warnings about normal operation, dropped by message. egui_wgpu
+/// warns "No window - clearing all surfaces" each time Android suspends the
+/// app (the window goes away while backgrounded); that's expected, not a
+/// problem worth logging or reporting (#386).
+fn is_noise(record: &Record) -> bool {
+    record.target() == "egui_wgpu::winit"
+        && record.args().as_str() == Some("No window - clearing all surfaces")
+}
+
 impl Log for Logger {
     /// The app's own messages from Info up; other crates (egui, wgpu, ...)
     /// only from Warn up, they're chatty. Nothing from symphonia: it logs
@@ -69,7 +78,7 @@ impl Log for Logger {
     }
 
     fn log(&self, record: &Record) {
-        if !self.enabled(record.metadata()) {
+        if !self.enabled(record.metadata()) || is_noise(record) {
             return;
         }
         // (A panic is counted by the hook, from what it knows of it.)
@@ -172,4 +181,19 @@ pub fn clear() {
 /// Where the log file is, if there is one.
 pub fn file_path() -> Option<PathBuf> {
     LOGGER.get().and_then(|l| l.path.clone())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn drops_egui_wgpu_suspend_warning() {
+        let noise = |target: &str, args: std::fmt::Arguments| {
+            is_noise(&Record::builder().level(Level::Warn).target(target).args(args).build())
+        };
+        assert!(noise("egui_wgpu::winit", format_args!("No window - clearing all surfaces")));
+        assert!(!noise("egui_wgpu::winit", format_args!("Surface lost")));
+        assert!(!noise("synththing::app", format_args!("No window - clearing all surfaces")));
+    }
 }
