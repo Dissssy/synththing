@@ -6,6 +6,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ### Added
 - Type in an exact playback speed or volume: click the value beside the speed or volume slider in the controls bar (or above it, when the bar is narrow) and type, say, 0.9818 for A=432 Hz tuning, then press Enter. Speed shows up to 4 decimals. Dragging the value nudges it.
+- The script editor's problems menu has a Copy all button, which copies every problem the script has, one per line with its line number.
 
 ### Fixed
 - Seeking in a MIDI song is instant now, even far into a long one. It used to play the whole song silently up to the new spot first, which could freeze playback for a long while.
