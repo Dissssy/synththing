@@ -4,6 +4,9 @@ What changed in each version of synththing, newest first. The app shows the new 
 
 ## Unreleased
 
+### Added
+- Type in an exact playback speed or volume: click the value beside the speed or volume slider in the controls bar (or above it, when the bar is narrow) and type, say, 0.9818 for A=432 Hz tuning, then press Enter. Speed shows up to 4 decimals. Dragging the value nudges it.
+
 ### Fixed
 - Seeking in a MIDI song is instant now, even far into a long one. It used to play the whole song silently up to the new spot first, which could freeze playback for a long while.
 - Android: the app no longer stops responding, and then shows only a grey screen, when Android closes its window in the background (swiping it away from recent apps, closing the mini player, or Android reclaiming it).
