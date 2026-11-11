@@ -314,7 +314,7 @@ impl App {
             let (from, to) = (from.center(), to.center());
             let t = ((time % 3.0) / 2.4).min(1.0) as f32;
             let at = from + (to - from) * t;
-            let color = egui::Color32::from_rgb(240, 200, 90);
+            let color = ctx.global_style().visuals.warn_fg_color;
             painter.arrow(from, (to - from) * 0.95, egui::Stroke::new(2.0, color.gamma_multiply(0.5)));
             painter.rect_filled(egui::Rect::from_center_size(at, egui::vec2(46.0, 18.0)), 4.0, color);
             painter.circle_filled(at + egui::vec2(16.0, 12.0), 5.0, egui::Color32::WHITE);
@@ -369,7 +369,7 @@ impl App {
                     ui.add_space(8.0);
                     ui.horizontal(|ui| {
                         if done {
-                            ui.colored_label(egui::Color32::from_rgb(120, 200, 120), "Done!");
+                            ui.colored_label(crate::theme::palette(ui.ctx()).success.0, "Done!");
                         }
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             let last = index + 1 == STEPS.len();

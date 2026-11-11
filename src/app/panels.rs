@@ -276,7 +276,7 @@ impl App {
         let mut close = false;
         ui.horizontal(|ui| {
             let (dot, hover) = if connected {
-                (egui::Color32::from_rgb(80, 200, 120), "Listening")
+                (crate::theme::palette(ui.ctx()).success.0, "Listening")
             } else {
                 (ui.visuals().weak_text_color(), "Not running")
             };

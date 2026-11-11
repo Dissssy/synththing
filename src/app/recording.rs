@@ -808,7 +808,7 @@ impl App {
                 render.stop();
             }
         } else if self.recording.recorder.is_none() {
-            let record = super::colored_icon_button("record", egui::Color32::from_rgb(230, 70, 70));
+            let record = super::colored_icon_button("record", ui.visuals().error_fg_color);
             if ui
                 .add(record)
                 .on_hover_text(format!(
@@ -1204,7 +1204,7 @@ impl App {
                 };
                 let rendering = draft.render && draft.kind != RecordKind::Free;
                 let label = egui::RichText::new(if rendering { "Render" } else { "Record" })
-                    .color(egui::Color32::from_rgb(230, 70, 70));
+                    .color(ui.visuals().error_fg_color);
                 if ui.add_enabled(ok && !script_error, egui::Button::new(label)).clicked() {
                     start = true;
                 }

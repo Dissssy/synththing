@@ -53,8 +53,8 @@ impl App {
             scroll.show_rows(ui, row_height, shown.len(), |ui, rows| {
                 for entry in &shown[rows] {
                     let color = match entry.level {
-                        log::Level::Error => egui::Color32::from_rgb(220, 90, 90),
-                        log::Level::Warn => egui::Color32::from_rgb(220, 180, 80),
+                        log::Level::Error => ui.visuals().error_fg_color,
+                        log::Level::Warn => ui.visuals().warn_fg_color,
                         _ => ui.visuals().text_color(),
                     };
                     ui.add(egui::Label::new(egui::RichText::new(entry.line()).monospace().color(color)).extend());

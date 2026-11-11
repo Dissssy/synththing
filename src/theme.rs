@@ -6,7 +6,8 @@
 //!
 //! Built-in themes can't be changed; your own live in the config
 //! (`Config::custom_themes`, colors as `#rrggbb` hex), so settings sync
-//! carries them, made by duplicating another. The Themes window (`app/themes.rs`) picks and edits them.
+//! carries them, made by duplicating another or by saving a changed built-in one
+//! as a copy. The Themes window (`app/themes.rs`) picks and edits them.
 
 
 use anyhow::{Result, bail};
@@ -89,10 +90,66 @@ pub struct Palette {
     /// Starred songs' alien, in lists.
     #[serde(default = "default_star")]
     pub star: Hex,
+    /// Something done: "Saved ...", a line added in a diff, "Listening".
+    #[serde(default = "default_success")]
+    pub success: Hex,
+    /// The name of synththing's own, official things in the online library.
+    #[serde(default = "default_official")]
+    pub official: Hex,
+    /// Under windows and popups (its alpha is how dark).
+    #[serde(default = "default_shadow")]
+    pub shadow: Hex,
+    /// The script editor's Lua: keywords, synththing's own functions,
+    /// strings, numbers and comments.
+    #[serde(default = "default_syntax")]
+    pub syntax: Syntax,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Syntax {
+    pub keyword: Hex,
+    pub function: Hex,
+    pub string: Hex,
+    pub number: Hex,
+    pub comment: Hex,
 }
 
 fn default_playing() -> Hex {
     hex(0x4caf50)
+}
+
+fn default_success() -> Hex {
+    hex(0x5abe6e)
+}
+
+fn light_success() -> Hex {
+    hex(0x2e8b45)
+}
+
+fn default_official() -> Hex {
+    hex(0xe6b43c)
+}
+
+fn light_official() -> Hex {
+    hex(0xa87a00)
+}
+
+fn default_shadow() -> Hex {
+    Hex(Color32::from_black_alpha(110))
+}
+
+fn light_shadow() -> Hex {
+    Hex(Color32::from_black_alpha(45))
+}
+
+/// One Dark's, for the dark themes.
+fn default_syntax() -> Syntax {
+    Syntax { keyword: hex(0xc678dd), function: hex(0x61afef), string: hex(0x98c379), number: hex(0xd19a66), comment: hex(0x828997) }
+}
+
+/// One Light's, for the light themes.
+fn light_syntax() -> Syntax {
+    Syntax { keyword: hex(0xa626a4), function: hex(0x4078f2), string: hex(0x50a14f), number: hex(0x986801), comment: hex(0x8a8c94) }
 }
 
 /// Neon green, for the dark themes (`light_star` on light ones).
@@ -105,24 +162,15 @@ fn light_star() -> Hex {
     hex(0x1fc40a)
 }
 
-/// The theme's `Palette::star`, kept where lists find it (`star_color`).
-fn star_id() -> egui::Id {
-    egui::Id::unique("theme_star_color")
+/// The theme's palette, kept where everything drawing finds it (`palette`).
+fn palette_id() -> egui::Id {
+    egui::Id::unique("theme_palette")
 }
 
-/// The color starred songs' note is in, in lists.
-pub fn star_color(ctx: &egui::Context) -> Color32 {
-    ctx.data(|d| d.get_temp(star_id())).unwrap_or(default_star().0)
-}
-
-/// The theme's `Palette::playing`, kept where lists find it (`playing_color`).
-fn playing_id() -> egui::Id {
-    egui::Id::unique("theme_playing_color")
-}
-
-/// The color the song playing is marked with in lists.
-pub fn playing_color(ctx: &egui::Context) -> Color32 {
-    ctx.data(|d| d.get_temp(playing_id())).unwrap_or(default_playing().0)
+/// The palette of the theme in use: for the colors egui's own look
+/// doesn't have (`Theme::apply` keeps it).
+pub fn palette(ctx: &egui::Context) -> Palette {
+    ctx.data(|d| d.get_temp(palette_id())).unwrap_or_else(|| default_theme().palette)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -183,6 +231,10 @@ fn dark() -> Theme {
             border: hex(0x3a3d46),
             playing: default_playing(),
             star: default_star(),
+            success: default_success(),
+            official: default_official(),
+            shadow: default_shadow(),
+            syntax: default_syntax(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 16 },
     }
@@ -214,6 +266,10 @@ fn light() -> Theme {
             border: hex(0xcdd0d7),
             playing: default_playing(),
             star: light_star(),
+            success: light_success(),
+            official: light_official(),
+            shadow: light_shadow(),
+            syntax: light_syntax(),
         },
         shape: Shape { widget_radius: 4, window_radius: 8, border_width: 1.0, shadow: 12 },
     }
@@ -246,6 +302,10 @@ fn frutiger_aero() -> Theme {
             border: hex(0x66b7df),
             playing: default_playing(),
             star: light_star(),
+            success: light_success(),
+            official: light_official(),
+            shadow: light_shadow(),
+            syntax: light_syntax(),
         },
         shape: Shape { widget_radius: 10, window_radius: 14, border_width: 1.0, shadow: 22 },
     }
@@ -286,6 +346,10 @@ fn from_visuals(name: &str, visuals: &Visuals) -> Theme {
             border: Hex(w.noninteractive.bg_stroke.color),
             playing: default_playing(),
             star: default_star(),
+            success: default_success(),
+            official: default_official(),
+            shadow: Hex(visuals.window_shadow.color),
+            syntax: default_syntax(),
         },
         shape: Shape {
             widget_radius: w.inactive.corner_radius.nw,
@@ -334,6 +398,7 @@ impl Theme {
         w.open.fg_stroke.color = p.strong_text.0;
         w.hovered.bg_stroke.color = p.widget_outline.0;
         w.active.bg_stroke.color = p.widget_outline.0;
+        w.open.bg_stroke.color = p.border.0;
         for state in [&mut w.noninteractive, &mut w.inactive, &mut w.hovered, &mut w.active, &mut w.open] {
             state.corner_radius = widget_radius;
         }
@@ -341,13 +406,17 @@ impl Theme {
         v.window_corner_radius = CornerRadius::same(self.shape.window_radius);
         v.menu_corner_radius = CornerRadius::same(self.shape.window_radius.min(10));
         v.window_stroke = Stroke::new(self.shape.border_width, p.border.0);
+        v.text_cursor.stroke.color = p.accent.0;
+        v.ime_composition.active_underline_stroke.color = p.strong_text.0;
+        v.ime_composition.inactive_underline_stroke.color = p.weak_text.0;
+        v.window_shadow.color = p.shadow.0;
+        v.popup_shadow.color = p.shadow.0;
         if self.shape.shadow > 0 {
-            let alpha = if self.dark { 110 } else { 45 };
             let shadow = Shadow {
                 offset: [0, (self.shape.shadow / 4) as i8],
                 blur: self.shape.shadow,
                 spread: 0,
-                color: Color32::from_black_alpha(alpha),
+                color: p.shadow.0,
             };
             v.window_shadow = shadow;
             v.popup_shadow = Shadow { blur: self.shape.shadow / 2, offset: [0, (self.shape.shadow / 8) as i8], ..shadow };
@@ -360,10 +429,7 @@ impl Theme {
         let theme = if self.dark { egui::Theme::Dark } else { egui::Theme::Light };
         ctx.set_theme(theme);
         ctx.set_visuals_of(theme, self.visuals());
-        ctx.data_mut(|d| {
-            d.insert_temp(playing_id(), self.palette.playing.0);
-            d.insert_temp(star_id(), self.palette.star.0);
-        });
+        ctx.data_mut(|d| d.insert_temp(palette_id(), self.palette.clone()));
     }
 }
 
@@ -465,8 +531,10 @@ mod tests {
         for theme in builtins() {
             let mut back = from_visuals(&theme.name, &theme.visuals());
             back.shape.shadow = theme.shape.shadow;
-            // (Like the playing color, the star isn't one of egui's.)
-            back.palette.star = theme.palette.star;
+            // (Like the playing color, these aren't egui's.)
+            let p = &theme.palette;
+            (back.palette.star, back.palette.success, back.palette.official) = (p.star, p.success, p.official);
+            back.palette.syntax = p.syntax.clone();
             assert_eq!(back.palette, theme.palette, "{}", theme.name);
         }
     }

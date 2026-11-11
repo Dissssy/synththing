@@ -485,7 +485,7 @@ impl App {
         // Lines with problems get a mark by their number.
         let mut marks = std::collections::HashMap::new();
         for d in &analysis.diagnostics {
-            let color = severity_color(d.severity);
+            let color = severity_color(ui.visuals(), d.severity);
             let entry = marks.entry(d.line).or_insert(color);
             if d.severity == Severity::Error {
                 *entry = color;
@@ -529,8 +529,8 @@ impl App {
                     .translate(output.galley_pos.to_vec2())
             };
             let visible = ui.clip_rect();
-            let find_color = egui::Color32::from_rgba_unmultiplied(230, 190, 60, 60);
-            let current_color = egui::Color32::from_rgba_unmultiplied(240, 160, 40, 150);
+            let warning = ui.visuals().warn_fg_color;
+            let (find_color, current_color) = (warning.gamma_multiply(0.25), warning.gamma_multiply(0.6));
             for (n, &(from, to)) in matches.iter().enumerate() {
                 let rect = row_rect(from, to);
                 if rect.intersects(visible) {
@@ -557,7 +557,7 @@ impl App {
                 let to = analysis.char_index(d.end).clamp(from, length).max(from + 1).min(length.max(from + 1));
                 let rect = row_rect(from, to.min(length));
                 if rect.intersects(visible) {
-                    shapes.push(squiggle(rect, severity_color(d.severity)));
+                    shapes.push(squiggle(rect, severity_color(ui.visuals(), d.severity)));
                 }
             }
             ui.painter().set(behind, shapes);
@@ -604,7 +604,7 @@ impl App {
                 let at = output.galley_pos + egui::vec2(row.rect().max.x + char_width * 3.0, row.pos.y);
                 let message = short_message(error, line);
                 let small = egui::FontId::proportional((font_size - 1.0).max(8.0));
-                ui.painter().text(at, egui::Align2::LEFT_TOP, message, small, egui::Color32::from_rgb(220, 90, 90));
+                ui.painter().text(at, egui::Align2::LEFT_TOP, message, small, ui.visuals().error_fg_color);
             }
 
             if let Some(index) = self.editor.scroll_to.take() {
@@ -909,13 +909,13 @@ impl App {
             let problems = analysis.diagnostics.len();
             if problems > 0 {
                 let errors = analysis.diagnostics.iter().any(|d| d.severity == Severity::Error);
-                let color = severity_color(if errors { Severity::Error } else { Severity::Warning });
+                let color = severity_color(ui.visuals(), if errors { Severity::Error } else { Severity::Warning });
                 let label = egui::RichText::new(format!("{problems} problem{}", if problems == 1 { "" } else { "s" }))
                     .color(color);
                 ui.menu_button(label, |ui| {
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for d in &analysis.diagnostics {
-                            let text = egui::RichText::new(format!("{}: {}", d.line, d.message)).color(severity_color(d.severity));
+                            let text = egui::RichText::new(format!("{}: {}", d.line, d.message)).color(severity_color(ui.visuals(), d.severity));
                             if ui.button(text).clicked() {
                                 let index = analysis.char_index(d.start);
                                 self.jump_to(ui.ctx(), editor_id, index);
@@ -1208,7 +1208,7 @@ fn paint_line_numbers(
 ) {
     let painter = ui.painter();
     let normal = ui.visuals().weak_text_color();
-    let error = egui::Color32::from_rgb(220, 90, 90);
+    let error = ui.visuals().error_fg_color;
     let right = gutter.right() - 8.0;
     let visible = ui.clip_rect();
     let mut line = 1;
@@ -1233,10 +1233,10 @@ fn paint_line_numbers(
     }
 }
 
-fn severity_color(severity: Severity) -> egui::Color32 {
+fn severity_color(visuals: &egui::Visuals, severity: Severity) -> egui::Color32 {
     match severity {
-        Severity::Error => egui::Color32::from_rgb(230, 80, 80),
-        Severity::Warning => egui::Color32::from_rgb(220, 180, 60),
+        Severity::Error => visuals.error_fg_color,
+        Severity::Warning => visuals.warn_fg_color,
     }
 }
 

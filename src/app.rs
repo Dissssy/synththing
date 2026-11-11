@@ -96,7 +96,7 @@ mod dispatch;
 mod reference;
 
 use widgets::{CATEGORIES_HEIGHT, categories_body, page_ui, fit_width, window_room, with_info, setting_row, settings_group, LABEL_WIDTH, control_width, setting_combo, setting_slider, setting_label, info_icon, inline_code_job, colored_icon_button, card, card_badge, status_pill, follow_button_ui};
-pub(crate) use widgets::{placeholder, icon, wrapping_combo, toggle_chip, chip, on_color, palette_color, icon_button, confirm_button, row_icon_button, row_icon_button_room};
+pub(crate) use widgets::{placeholder, icon, wrapping_combo, toggle_chip, chip, on_color, icon_button, confirm_button, row_icon_button, row_icon_button_room};
 use controls_bar::{ICON_SIZE, drag_handle, square_corner, loop_text, shuffle_text, seek_bar_ui, status_color, status_outcome, STATUS_TARGET};
 pub(crate) use controls_bar::play_button;
 use updates::changelog_body_ui;
@@ -1415,7 +1415,7 @@ fn song_info_widgets(ui: &mut egui::Ui, cache: &mut SongInfoCache, path: &Path, 
         ui.weak(length_text(info.as_deref()));
     }
     if let Some(info) = info.filter(|i| i.is_heavy()) {
-        ui.colored_label(egui::Color32::from_rgb(230, 80, 80), "!").on_hover_text(format!(
+        ui.colored_label(ui.visuals().error_fg_color, "!").on_hover_text(format!(
             "A very large MIDI file: {} notes. It plays fine, but a visualizer script going through every \
              note can stall on it.",
             crate::song_info::thousands(info.notes.unwrap_or_default())

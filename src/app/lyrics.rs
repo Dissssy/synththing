@@ -113,7 +113,7 @@ impl App {
             lines_ui(ui, rect, &lyrics, n, line_height, current, position, view.length - offset);
             return size_error;
         }
-        let playing = crate::theme::playing_color(ui.ctx());
+        let playing = crate::theme::palette(ui.ctx()).playing.0;
         let scroll_to = (current != self.lyrics.shown).then_some(current).flatten();
         self.lyrics.shown = current;
         let mut seek = None;
@@ -207,7 +207,7 @@ fn progress_bar(ui: &egui::Ui, top: egui::Pos2, done: f32) {
     let width = (ui.max_rect().width() * 0.6).min(400.0);
     let track = egui::Rect::from_min_size(egui::pos2(top.x - width / 2.0, top.y), egui::vec2(width, BAR));
     ui.painter().rect_filled(track, 1.5, ui.visuals().faint_bg_color);
-    ui.painter().rect_filled(egui::Rect::from_min_size(track.min, egui::vec2(width * done, BAR)), 1.5, crate::theme::playing_color(ui.ctx()));
+    ui.painter().rect_filled(egui::Rect::from_min_size(track.min, egui::vec2(width * done, BAR)), 1.5, crate::theme::palette(ui.ctx()).playing.0);
 }
 
 fn text_size(ui: &egui::Ui) -> f32 {
@@ -224,7 +224,7 @@ fn line_height(ui: &egui::Ui) -> f32 {
 #[allow(clippy::too_many_arguments)]
 fn lines_ui(ui: &mut egui::Ui, rect: egui::Rect, lyrics: &Lyrics, n: u8, line_height: f32, current: Option<usize>, position: f64, length: f64) {
     let n = usize::from(n);
-    let playing = crate::theme::playing_color(ui.ctx());
+    let playing = crate::theme::palette(ui.ctx()).playing.0;
     let font = egui::FontId::proportional(text_size(ui));
     let block = n as f32 * line_height + BAR_ROOM;
     let top = rect.center().y - block / 2.0;

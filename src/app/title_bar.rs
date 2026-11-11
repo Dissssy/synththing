@@ -360,7 +360,7 @@ pub(super) fn bar_icon(name: &str) -> egui::Button<'static> {
 fn window_buttons_ui(ui: &mut egui::Ui) {
     let button = bar_icon;
     ui.scope(|ui| {
-        let red = egui::Color32::from_rgb(196, 43, 28);
+        let red = ui.visuals().error_fg_color;
         let w = &mut ui.visuals_mut().widgets;
         (w.hovered.weak_bg_fill, w.active.weak_bg_fill) = (red, red.gamma_multiply(0.8));
         (w.hovered.fg_stroke.color, w.active.fg_stroke.color) = (egui::Color32::WHITE, egui::Color32::WHITE);

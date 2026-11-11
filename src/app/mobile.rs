@@ -454,7 +454,7 @@ impl App {
         let failed = status_outcome(text) == Some(false);
         let least = if failed { FAILURE_TOAST } else { TOAST };
         let least = least.max(Duration::from_secs_f32(text.len() as f32 / READING_SPEED));
-        let color = status_color(&ctx.global_style().visuals, text);
+        let color = status_color(ctx, text);
         let (anchor, offset) = (egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -24.0));
         if super::toast::draw(ctx, "status_toast", anchor, offset, text, color, *since, least) {
             self.mobile_state.toast = None;
