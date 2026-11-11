@@ -1,16 +1,6 @@
 # Changelog
 
-What changed in each version of synththing, newest first. The app shows the new parts after an update (and all of it under Help > Changelog...).
-
-## Unreleased
-
-### Added
-- Wishlist: a broom button on the Got it heading takes every wish that came true off the wishlist at once (click it twice to confirm).
-- The script editor's problems menu has a Copy all button, which copies every problem the script has, one per line with its line number.
-
-### Fixed
-- Seeking in a MIDI song is instant now, even far into a long one. It used to play the whole song silently up to the new spot first, which could freeze playback for a long while.
-- Android: the app no longer stops responding, and then shows only a grey screen, when Android closes its window in the background (swiping it away from recent apps, closing the mini player, or Android reclaiming it).
+What changed in each version of synththing, newest first. The app shows the new parts after an update (and all of it under Help > Changelog...). Changes not released yet are in `changelog.d/`.
 
 ## 2.9.0 (2026-11-07)
 

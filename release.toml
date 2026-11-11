@@ -10,19 +10,37 @@ consolidate-commits = false
 allow-branch = ["master"]
 tag-name = "v{{version}}"
 pre-release-commit-message = "Release {{version}}"
-# Before the release commit, with the new version and changelog in place:
-# a release whose Unreleased section was empty stops here instead of
-# failing release.yml's check. A plain awk, as that check is, so cutting a
-# release builds nothing (CI tests the changelog's format on every push).
+# Before the release commit, with the new version in place: gathers
+# changelog.d/ (every file but its README) into a new version section at
+# the top of CHANGELOG.md, each group once (Added, Changed, Fixed, Removed,
+# then any other), and deletes the files; the release commit (`git commit
+# -a`) takes both. With nothing in changelog.d/ it stops here instead of
+# releasing without notes. Plain sh and awk, so cutting a release builds
+# nothing (CI tests the fragments' format on every push).
 pre-release-hook = ["sh", "-c", '''
-awk -v v="$NEW_VERSION" '/^## / { on = ($2 == v); next } on && NF { found = 1 } END { exit !found }' CHANGELOG.md \
-  || { echo "CHANGELOG.md has nothing under $NEW_VERSION" >&2; exit 1; }
+set -e
+fragments=$(find changelog.d -maxdepth 1 -name '*.md' ! -name README.md | sort)
+[ -n "$fragments" ] || { echo "changelog.d/ has nothing for $NEW_VERSION" >&2; exit 1; }
+notes=$(mktemp)
+awk '
+  /^### / { group = substr($0, 5); if (!(group in body)) { order[++n] = group; body[group] = "" } next }
+  NF { body[group] = body[group] $0 "\n" }
+  function emit(g) { printf "\n### %s\n%s", g, body[g]; done[g] = 1 }
+  END {
+    split("Added Changed Fixed Removed", known, " ")
+    for (i = 1; i <= 4; i++) if (known[i] in body) emit(known[i])
+    for (i = 1; i <= n; i++) if (!(order[i] in done)) emit(order[i])
+  }
+' $fragments > "$notes"
+awk -v head="## $NEW_VERSION ($(date -u +%F))" -v notes="$notes" '
+  !added && /^## / { print head; while ((getline line < notes) > 0) print line; print ""; added = 1 }
+  { print }
+' CHANGELOG.md > CHANGELOG.md.new
+mv CHANGELOG.md.new CHANGELOG.md
+rm "$notes" $fragments
 ''']
 tag-message = "Release {{version}}"
-# CHANGELOG.md: the Unreleased section becomes the new version's, with a
-# fresh Unreleased heading above it for what comes next.
 pre-release-replacements = [
-  { file = "CHANGELOG.md", search = "## Unreleased", replace = "## Unreleased\n\n## {{version}} ({{date}})", exactly = 1 },
   # src/lua_api.rs: what's new to scripts ships in this version (each entry's
   # `"next"`, after its section or `since:`; not the code that reads it).
   { file = "src/lua_api.rs", search = "([A-Z_]+, |since: )\"next\"", replace = "${1}\"{{version}}\"", min = 0 },

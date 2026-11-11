@@ -1,7 +1,7 @@
 # Cuts a release from GitHub: Actions > Cut release > Run workflow, picking
 # patch, minor or major. It runs `cargo release <level> --execute` on one of
 # our runners, as on a dev machine (docs/RELEASING.md): bumps Cargo.toml,
-# turns CHANGELOG.md's Unreleased section into the version's, commits
+# gathers changelog.d/ into CHANGELOG.md's section for the version, commits
 # "Release X.Y.Z", tags vX.Y.Z and pushes both. The pushed tag starts
 # release.yml. With "Dry run" ticked it only shows what it would do.
 #

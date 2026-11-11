@@ -1,27 +1,32 @@
-//! The changelog: `CHANGELOG.md`, embedded and parsed into versions for
-//! the What's new window (after an update) and Help > Changelog....
+//! The changelog: `CHANGELOG.md` and the changes waiting for the next
+//! release in `changelog.d/`, embedded and parsed into versions for the
+//! What's new window (after an update) and Help > Changelog....
 //!
-//! The file's format, kept simple on purpose: `## 0.2.2 (2026-10-03)` (or
-//! `## Unreleased`) starts a version, `### New` a group within it, `- `
-//! a bullet (wrapped lines carry on), anything else a paragraph. Text
-//! before the first version is the file's own introduction, not shown.
-//! A group named twice in one version is shown once, with both's lines:
-//! git merges this file by union (`.gitattributes`), so two branches that
-//! each start an `### Added` under Unreleased leave two.
-//! `cargo release` turns `## Unreleased` into the new version's heading
-//! (release.toml), and the release workflow publishes that version's
-//! section as the GitHub release notes.
+//! The format, kept simple on purpose: `## 0.2.2 (2026-10-03)` starts a
+//! version, `### Added` a group within it, `- ` a bullet (wrapped lines
+//! carry on), anything else a paragraph. Text before the first version is
+//! the file's own introduction, not shown.
+//! Each pull request adds its own `changelog.d/<branch>.md` of groups and
+//! bullets (`changelog.d/README.md`), so no two edit the same lines; they
+//! show here as Unreleased, each group once. Cutting a release
+//! (`release.toml`) gathers them into the new version's section of
+//! `CHANGELOG.md` and deletes them, and the release workflow publishes
+//! that section as the GitHub release notes.
 
 use std::sync::OnceLock;
 
 const CHANGELOG: &str = include_str!("../CHANGELOG.md");
+
+// `CHANGELOG_FRAGMENTS`: `changelog.d/*.md` as (file name, contents).
+include!(concat!(env!("OUT_DIR"), "/changelog_fragments.rs"));
 
 /// A version number, comparable (`(0, 2, 2)`).
 pub type Version = (u32, u32, u32);
 
 #[derive(Clone, Debug)]
 pub struct Release {
-    /// The heading as written: "0.2.2 (2026-10-03)", "Unreleased".
+    /// The heading as written: "0.2.2 (2026-10-03)", or "Unreleased" for
+    /// `changelog.d/`.
     pub heading: String,
     /// `None` for Unreleased.
     pub version: Option<Version>,
@@ -30,7 +35,8 @@ pub struct Release {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Block {
-    /// A group: "New", "Changed", "Fixed".
+    /// A group: "Added", "Changed", "Fixed", "Removed" (older versions
+    /// have "New").
     Heading(String),
     /// May have `inline code`.
     Bullet(String),
@@ -57,7 +63,10 @@ pub fn current_version() -> Option<Version> {
 /// Every version in the changelog with something in it, newest first.
 pub fn releases() -> &'static [Release] {
     static RELEASES: OnceLock<Vec<Release>> = OnceLock::new();
-    RELEASES.get_or_init(|| parse(CHANGELOG))
+    RELEASES.get_or_init(|| {
+        let unreleased: String = std::iter::once("## Unreleased\n").chain(CHANGELOG_FRAGMENTS.iter().flat_map(|(_, text)| ["\n", *text])).collect();
+        parse(&unreleased).into_iter().chain(parse(CHANGELOG)).collect()
+    })
 }
 
 /// The versions newer than `since`, up to this build's (Unreleased
@@ -138,6 +147,10 @@ fn merge_groups(blocks: Vec<Block>) -> Vec<Block> {
 mod tests {
     use super::*;
 
+    /// The groups a release's changes go under, in the order
+    /// `release.toml` lists them.
+    const GROUPS: [&str; 4] = ["Added", "Changed", "Fixed", "Removed"];
+
     #[test]
     fn the_changelog_parses_and_covers_this_version() {
         let current = current_version().unwrap();
@@ -162,7 +175,24 @@ mod tests {
                 }
             }
         }
-        assert!(CHANGELOG.contains("## Unreleased"), "cargo release needs the Unreleased heading to rename");
+        assert!(!CHANGELOG.contains("## Unreleased"), "changes waiting for a release go in changelog.d/");
+        assert_eq!(releases()[0].heading == "Unreleased", !CHANGELOG_FRAGMENTS.is_empty(), "changelog.d/ shows as Unreleased");
+    }
+
+    #[test]
+    fn changelog_fragments_are_groups_of_bullets() {
+        for (name, text) in CHANGELOG_FRAGMENTS {
+            let mut in_group = false;
+            for line in text.lines().filter(|l| !l.trim().is_empty()) {
+                if let Some(group) = line.strip_prefix("### ") {
+                    assert!(GROUPS.contains(&group.trim()), "changelog.d/{name}: `{line}` isn't one of {GROUPS:?}");
+                    in_group = true;
+                } else {
+                    assert!(in_group, "changelog.d/{name}: `{line}` comes before a group heading (`### Added`, ...)");
+                    assert!(!line.starts_with('#'), "changelog.d/{name}: `{line}`: only `### ` group headings go here");
+                }
+            }
+        }
     }
 
     #[test]
@@ -180,7 +210,7 @@ mod tests {
         assert_eq!(
             merged[0].blocks,
             [Block::Heading("Added".into()), Block::Bullet("A".into()), Block::Bullet("C".into()), Block::Heading("Fixed".into()), Block::Bullet("B".into())],
-            "a group named twice (a union merge) is shown once"
+            "a group named twice (by two changelog.d files) is shown once"
         );
         assert_eq!(parse_version("v0.2.10"), Some((0, 2, 10)));
         assert_eq!(parse_version("0.2"), None);
