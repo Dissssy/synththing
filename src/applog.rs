@@ -59,6 +59,18 @@ fn is_noise(record: &Record) -> bool {
         && record.args().as_str() == Some("No window - clearing all surfaces")
 }
 
+/// Library warnings that describe the device rather than a problem, kept
+/// in the log at info level (for diagnosing GPU trouble) but not counted.
+/// wgpu-core warns "Missing downlevel flags" and then dumps the adapter's
+/// downlevel capabilities whenever it opens a device on a GPU that isn't
+/// fully WebGPU compliant, which most phone GPUs aren't (#389).
+fn is_info(record: &Record) -> bool {
+    record.target() == "wgpu_core::instance" && {
+        let message = record.args().to_string();
+        message.starts_with("Missing downlevel flags") || message.starts_with("DownlevelCapabilities")
+    }
+}
+
 impl Log for Logger {
     /// The app's own messages from Info up; other crates (egui, wgpu, ...)
     /// only from Warn up, they're chatty. Nothing from symphonia: it logs
@@ -79,6 +91,10 @@ impl Log for Logger {
 
     fn log(&self, record: &Record) {
         if !self.enabled(record.metadata()) || is_noise(record) {
+            return;
+        }
+        if is_info(record) {
+            self.push(Level::Info, record.target(), record.args().to_string());
             return;
         }
         // (A panic is counted by the hook, from what it knows of it.)
@@ -195,5 +211,17 @@ mod tests {
         assert!(noise("egui_wgpu::winit", format_args!("No window - clearing all surfaces")));
         assert!(!noise("egui_wgpu::winit", format_args!("Surface lost")));
         assert!(!noise("synththing::app", format_args!("No window - clearing all surfaces")));
+    }
+
+    #[test]
+    fn demotes_wgpu_downlevel_warnings() {
+        let info = |target: &str, args: std::fmt::Arguments| {
+            is_info(&Record::builder().level(Level::Warn).target(target).args(args).build())
+        };
+        let flags = "VERTEX_STORAGE";
+        assert!(info("wgpu_core::instance", format_args!("Missing downlevel flags: {flags}\nThis is not an invalid use")));
+        assert!(info("wgpu_core::instance", format_args!("{:#?}", eframe::wgpu::DownlevelCapabilities::default())));
+        assert!(!info("wgpu_core::instance", format_args!("Adapter lost")));
+        assert!(!info("synththing::app", format_args!("Missing downlevel flags: {flags}")));
     }
 }
