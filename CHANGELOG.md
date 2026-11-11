@@ -5,6 +5,7 @@ What changed in each version of synththing, newest first. The app shows the new 
 ## Unreleased
 
 ### Added
+- Wishlist: a broom button on the Got it heading takes every wish that came true off the wishlist at once (click it twice to confirm).
 - The script editor's problems menu has a Copy all button, which copies every problem the script has, one per line with its line number.
 
 ### Fixed
