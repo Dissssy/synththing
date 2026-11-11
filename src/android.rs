@@ -40,9 +40,11 @@ const BACKGROUND_TICK: Duration = Duration::from_millis(250);
 /// The JVM, for calls into Java from any thread.
 static VM: OnceLock<JavaVM> = OnceLock::new();
 
-/// The activity, whose methods those are: the current one (`android_main`
-/// runs again with a new one if Android recreates it).
+/// The activity, whose methods those are.
 static ACTIVITY: Mutex<Option<GlobalRef>> = Mutex::new(None);
+
+/// The app, for [`destroyed`].
+static APP: OnceLock<Arc<Mutex<App>>> = OnceLock::new();
 
 /// Start the app (from `android_main`).
 pub fn main(android: AndroidApp) {
@@ -61,6 +63,7 @@ pub fn main(android: AndroidApp) {
         }
     };
     let app = Arc::new(Mutex::new(app));
+    let _ = APP.set(Arc::clone(&app));
     let last_frame = Arc::new(Mutex::new(Instant::now()));
     let options = eframe::NativeOptions { android_app: Some(android), system_font_fallback: false, ..Default::default() };
     let shared = Shared { app: Arc::clone(&app), last_frame: Arc::clone(&last_frame) };
@@ -415,6 +418,24 @@ pub fn set_tag(tag: String, on: bool) {
 /// The media buttons pressed since the last call.
 pub fn take_media_commands() -> Vec<MediaCommand> {
     std::mem::take(&mut *MEDIA_COMMANDS.lock().unwrap())
+}
+
+/// From Java: the activity is being destroyed (swiped away from recent
+/// apps, the mini player closed, or Android reclaiming it). Save what
+/// closing the app saves and end the process.
+///
+/// winit ignores Android's onDestroy, so eframe never returns and
+/// `android_main` never ends, and NativeActivity's onDestroy waits for
+/// exactly that: Android's main thread would hang there ("isn't
+/// responding", then a grey screen when the app is opened again). There's
+/// one app per process, so with its activity gone, the process goes too.
+pub fn destroyed() {
+    log::info!("the activity is being destroyed: exiting");
+    if let Some(app) = APP.get() {
+        eframe::App::on_exit(&mut *app.lock().unwrap_or_else(|e| e.into_inner()));
+    }
+    log::logger().flush();
+    std::process::exit(0);
 }
 
 static LINKS: Mutex<Vec<String>> = Mutex::new(Vec::new());

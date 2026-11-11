@@ -31,4 +31,7 @@ final class Native {
 
     /** The app was opened with a link (a sign-in code). */
     static native void openLink(String link);
+
+    /** The activity is being destroyed: the app saves and ends the process (doesn't return). */
+    static native void destroyed();
 }
