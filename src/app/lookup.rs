@@ -80,6 +80,21 @@ impl App {
                     self.lookup.albums = Some((planned.revision, planned.albums));
                 }
                 Done::Album(album, outcome, fills) => self.lookup_answered(&album, outcome, fills),
+                Done::Title(key, found) => {
+                    let found = match found {
+                        Ok(ids) => {
+                            self.lookup.error = None;
+                            Answer::Asked(ids)
+                        }
+                        Err(e) => {
+                            log::warn!("couldn't look song {key} up by its title: {e}");
+                            self.lookup.error = Some(e);
+                            Answer::Failed
+                        }
+                    };
+                    let at = crate::settings_sync::now();
+                    self.lookup.state.get_or_insert_with(State::load).note(&format!("title:{key}"), Some(Tried { at, found }));
+                }
                 Done::Release(id, release) => self.release_refreshed(&id, release),
                 Done::Artist(_, Ok(artist)) => {
                     self.lookup.kept.keep_artist(artist);
@@ -167,6 +182,13 @@ impl App {
                 self.lookup.error = Some(e);
                 Some(Tried { at, found: Answer::Failed })
             }
+        };
+        // (Songs lined up with a release they were found on by their
+        // titles: once, whatever came of it, unless it failed.)
+        let tried = match tried {
+            Some(Tried { found: Answer::Failed, .. }) => tried,
+            _ if album.by == matching::By::Titles => Some(Tried { at, found: Answer::Asked(Vec::new()) }),
+            _ => tried,
         };
         self.lookup.state.get_or_insert_with(State::load).note(&album.id, tried);
     }

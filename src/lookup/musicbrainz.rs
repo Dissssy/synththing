@@ -6,7 +6,6 @@
 //! The pace is kept across every client (the lookup's and the wishlist's
 //! searches), since MusicBrainz counts what this computer asks.
 
-use std::collections::{BTreeSet, HashMap};
 use std::path::PathBuf;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
@@ -41,8 +40,6 @@ const EDITIONS: u8 = 25;
 const HITS: u8 = 10;
 /// How many releases' track lists are fetched at most, for one album.
 const FETCHED: usize = 4;
-/// How many of a batch's titles are searched for.
-const BATCH_TITLES: usize = 3;
 /// The least time between two requests.
 const PACE: Duration = Duration::from_millis(1100);
 /// How long an answer is kept before it's asked for again.
@@ -318,26 +315,18 @@ impl MusicBrainz {
         Ok(release)
     }
 
-    /// The releases a batch of songs (`matching::By::Batch`) might be on,
-    /// with their tracks: those that recordings named as its most telling
-    /// titles are on, the most of them first, for two titles or more.
-    pub fn batch_releases(&mut self, album: &Album, fresh: bool) -> Result<Vec<Release>> {
-        let titles = matching::batch_titles(album, BATCH_TITLES);
-        let mut found: HashMap<String, BTreeSet<usize>> = HashMap::new();
-        for (i, title) in titles.iter().enumerate() {
-            for hit in self.search_recordings(format!("recording:{}", quoted(title)), fresh)?.iter().map(hit) {
-                if matching::similar(title, &hit.title) < 0.9 {
-                    continue;
-                }
-                for release in hit.releases {
-                    found.entry(release.id).or_default().insert(i);
-                }
+    /// The releases (by id) recordings named `title` are on, by
+    /// anyone: for a song on no album and by nobody (`matching::By::Titles`).
+    pub fn title_releases(&mut self, title: &str) -> Result<Vec<String>> {
+        let mut ids = Vec::new();
+        for hit in self.search_recordings(format!("recording:{}", quoted(title)), false)?.iter().map(hit) {
+            if matching::similar(title, &hit.title) >= 0.9 {
+                ids.extend(hit.releases.into_iter().map(|r| r.id));
             }
         }
-        let mut ids: Vec<(usize, String)> =
-            found.into_iter().filter(|(id, titles)| titles.len() >= 2 && !album.rejected.contains(id)).map(|(id, titles)| (titles.len(), id)).collect();
-        ids.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
-        ids.into_iter().take(FETCHED).map(|(_, id)| self.release(&id, fresh).map(|e| converted(&e))).collect()
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
     }
 
     /// The releases that might be `album`, with their tracks: the search's

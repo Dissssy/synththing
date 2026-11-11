@@ -32,10 +32,11 @@ pub enum By {
     Name,
     /// By its one song's recording: a song on no album, by an artist.
     Recording,
-    /// By its songs' titles, together: songs on no album and by nobody,
-    /// with their track numbers, that came in together (one import).
-    /// Only those that line up with a release are matched to it.
-    Batch,
+    /// By its songs' titles, each looked up once: the library's songs on
+    /// no album and by nobody, with their track numbers, against a release
+    /// several of them were found on (`decide_titles`). Only those that
+    /// line up with it are matched to it.
+    Titles,
 }
 
 /// One of an album's songs.
@@ -330,31 +331,25 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     if rivals.is_empty() { Verdict::Match(best, fits[best].tracks.clone()) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
 }
 
-/// How many of a batch's songs (at least) must line up with a release,
-/// numbered as its tracks are, for it to be theirs.
-pub const BATCH_SONGS: usize = 3;
+/// How many of the library's numbered songs (at least) must line up
+/// with a release, numbered as its tracks are, for it to be theirs.
+pub const TITLES_SONGS: usize = 3;
 
-/// Which of `releases` a batch's songs (`By::Batch`) are on, if one
-/// surely is: the one with the most of them lined up with its tracks and
-/// numbered as they are, at least `BATCH_SONGS`, and most of the batch or
-/// half the release (a batch can be several albums). Only the songs lined
-/// up with it are matched; a release of another album as good leaves it
-/// to a person.
-pub fn decide_batch(album: &Album, releases: &[Release]) -> Verdict {
+/// Which of `releases` the library's numbered songs on no album
+/// (`By::Titles`) are on, if one surely is: the one with the most of them
+/// lined up with its tracks and numbered as they are, at least
+/// `TITLES_SONGS`. Only the songs lined up with it are matched; a release
+/// of another album as good leaves it to a person.
+pub fn decide_titles(album: &Album, releases: &[Release]) -> Verdict {
     let fits: Vec<Fit> = releases.iter().map(|r| fit(album, r)).collect();
     let placed = |i: usize| {
         let release = &releases[i];
         album.songs.iter().zip(&fits[i].tracks).filter(|(song, track)| track.is_some_and(|t| song.track == Some(release.tracks[t].position))).count()
     };
     let counts: Vec<usize> = (0..releases.len()).map(|i| if album.rejected.contains(&releases[i].id) { 0 } else { placed(i) }).collect();
-    let good = |i: usize| {
-        let n = counts[i] as f64;
-        counts[i] >= BATCH_SONGS && (n >= album.songs.len() as f64 * MOSTLY || n >= releases[i].tracks.len() as f64 * 0.5)
-    };
-    let mut candidates: Vec<usize> = (0..releases.len()).filter(|&i| good(i)).collect();
+    let mut candidates: Vec<usize> = (0..releases.len()).filter(|&i| counts[i] >= TITLES_SONGS).collect();
     if candidates.is_empty() {
-        let maybe: Vec<usize> = (0..releases.len()).filter(|&i| counts[i] >= BATCH_SONGS).collect();
-        return if maybe.is_empty() { Verdict::NotFound } else { Verdict::Unsure(maybe) };
+        return Verdict::NotFound;
     }
     candidates.sort_by(|&a, &b| {
         counts[b].cmp(&counts[a]).then_with(|| {
@@ -365,18 +360,9 @@ pub fn decide_batch(album: &Album, releases: &[Release]) -> Verdict {
     let best = candidates[0];
     let group = |i: usize| releases[i].group.as_deref().unwrap_or(&releases[i].id);
     let rivals: Vec<usize> = candidates.iter().copied().filter(|&i| group(i) != group(best) && counts[i] >= counts[best]).collect();
-    if rivals.is_empty() { Verdict::Match(best, fits[best].tracks.clone()) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
-}
-
-/// The titles of a batch's songs (`By::Batch`) to search for, the most
-/// telling first: the longest, each once, of four letters or more.
-pub fn batch_titles(album: &Album, most: usize) -> Vec<&str> {
-    let mut titles: Vec<&str> = album.songs.iter().map(|s| s.title.as_str()).filter(|t| key(t).chars().count() >= 4).collect();
-    titles.sort_by_key(|t| std::cmp::Reverse(key(t).chars().count()));
-    let mut seen = HashSet::new();
-    titles.retain(|t| seen.insert(key(t)));
-    titles.truncate(most);
-    titles
+    // (Songs that don't line up with it stay as they are.)
+    let tracks = album.songs.iter().zip(&fits[best].tracks).map(|(song, track)| track.filter(|&t| song.track == Some(releases[best].tracks[t].position))).collect();
+    if rivals.is_empty() { Verdict::Match(best, tracks) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
 }
 
 /// A recording a search for a song found, with the releases it's on.
@@ -517,25 +503,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_batch_is_on_the_release_most_of_it_lines_up_with() {
+    fn numbered_songs_are_on_the_release_three_of_them_line_up_with() {
         let ost = release("ost", "g1", "Mr. Sleepy Man Soundtrack", "Devin Santi", &[("Mr. Sleepy Man Theme", 151.0), ("Bedtime", 90.0), ("Night Walk", 120.0), ("Wake Up", 80.0)]);
         let other = release("other", "g2", "Another Game OST", "Someone", &[("Bedtime", 90.0), ("Morning", 60.0)]);
-        let batch = |songs: Vec<Song>| Album { id: "batch:a".into(), name: "batch".into(), artist: None, songs, rejected: Vec::new(), by: By::Batch };
-        let ours = batch(vec![song("Mr. Sleepy Man Theme", 1, 150.0), song("Bedtime", 2, 91.0), song("Night Walk", 3, 119.0), song("Unrelated", 9, 30.0)]);
-        assert_eq!(decide_batch(&ours, &[other.clone(), ost.clone()]), Verdict::Match(1, vec![Some(0), Some(1), Some(2), None]), "three of four line up");
-        let few = batch(vec![song("Mr. Sleepy Man Theme", 1, 150.0), song("Bedtime", 2, 91.0), song("Other", 3, 10.0), song("More", 4, 10.0)]);
-        assert_eq!(decide_batch(&few, std::slice::from_ref(&ost)), Verdict::NotFound, "two lined up aren't enough");
-        let misnumbered = batch(vec![song("Mr. Sleepy Man Theme", 7, 150.0), song("Bedtime", 8, 91.0), song("Night Walk", 9, 119.0)]);
-        assert_eq!(decide_batch(&misnumbered, std::slice::from_ref(&ost)), Verdict::NotFound, "numbered otherwise");
-        let rejected = Album { rejected: vec!["ost".into()], ..ours };
-        assert_eq!(decide_batch(&rejected, &[ost]), Verdict::NotFound, "Wrong match");
-    }
-
-    #[test]
-    fn a_batch_searches_its_most_telling_titles() {
-        let songs = ["Bedtime", "Intro", "Mr. Sleepy Man Theme", "Bedtime", "Up", "Night Walk"].iter().enumerate().map(|(i, t)| song(t, i as u32 + 1, 1.0)).collect();
-        let album = Album { id: "batch:a".into(), name: "batch".into(), artist: None, songs, rejected: Vec::new(), by: By::Batch };
-        assert_eq!(batch_titles(&album, 3), ["Mr. Sleepy Man Theme", "Night Walk", "Bedtime"]);
+        let ours = |songs: Vec<Song>| Album { id: "found:ost".into(), name: "found".into(), artist: None, songs, rejected: Vec::new(), by: By::Titles };
+        let many = ours(vec![song("Mr. Sleepy Man Theme", 1, 150.0), song("Bedtime", 2, 91.0), song("Night Walk", 3, 119.0), song("Wake Up", 7, 80.0), song("Unrelated", 9, 30.0)]);
+        assert_eq!(
+            decide_titles(&many, &[other.clone(), ost.clone()]),
+            Verdict::Match(1, vec![Some(0), Some(1), Some(2), None, None]),
+            "three line up; one numbered otherwise stays"
+        );
+        let few = ours(vec![song("Mr. Sleepy Man Theme", 1, 150.0), song("Bedtime", 2, 91.0), song("Other", 3, 10.0), song("More", 4, 10.0)]);
+        assert_eq!(decide_titles(&few, std::slice::from_ref(&ost)), Verdict::NotFound, "two lined up aren't enough");
+        let misnumbered = ours(vec![song("Mr. Sleepy Man Theme", 7, 150.0), song("Bedtime", 8, 91.0), song("Night Walk", 9, 119.0)]);
+        assert_eq!(decide_titles(&misnumbered, std::slice::from_ref(&ost)), Verdict::NotFound, "numbered otherwise");
+        let rejected = Album { rejected: vec!["ost".into()], ..many };
+        assert_eq!(decide_titles(&rejected, &[ost]), Verdict::NotFound, "Wrong match");
     }
 
     fn song(title: &str, track: u32, length: f64) -> Song {

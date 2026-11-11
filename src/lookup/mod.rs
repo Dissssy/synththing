@@ -4,8 +4,10 @@
 //! come from the Cover Art Archive (`album_art`). One the lookup isn't
 //! sure of, or doesn't find, is noted here (`Tried`, in `lookup.json`, on
 //! this device only) and tried again later.
-//! Numbered songs on no album and by nobody that came in together are
-//! looked up as a batch, by their titles (`matching::decide_batch`).
+//! Numbered songs on no album and by nobody are each looked up once by
+//! their titles; a release three or more of them were found on is then
+//! fetched, and those that line up with it are matched
+//! (`matching::decide_titles`).
 //! A song on no album is looked up by its recording instead
 //! (`matching::pick_recording`), and a match's release is asked for again
 //! every six months (`REFRESH`), for what's changed since. Each artist
@@ -96,8 +98,6 @@ pub fn albums_of<'s>(songs: impl Iterator<Item = (&'s str, &'s song_store::Song)
     let mut albums: HashMap<String, Album> = HashMap::new();
     let mut artists: HashMap<String, Vec<String>> = HashMap::new();
     let mut loose = Vec::new();
-    // (Songs on no album and by nobody, but numbered: by when they came in.)
-    let mut unnamed: Vec<(i64, matching::Song, Vec<String>)> = Vec::new();
     for (key, song) in songs {
         if is_midi(&song.name) {
             continue;
@@ -116,8 +116,7 @@ pub fn albums_of<'s>(songs: impl Iterator<Item = (&'s str, &'s song_store::Song)
         };
         let Some(name) = own_album(song, &facts, ignore) else {
             // (On no album: looked up by itself, if it says who it's by;
-            // else with the others that came in with it, if it's
-            // numbered.)
+            // else by its title, if it's numbered: `titled`.)
             if ours.artist.is_some() && facts.text(Field::Title).is_some() {
                 loose.push(Album {
                     id: format!("song:{key}"),
@@ -128,15 +127,6 @@ pub fn albums_of<'s>(songs: impl Iterator<Item = (&'s str, &'s song_store::Song)
                     rejected,
                     by: By::Recording,
                 });
-            } else if ours.artist.is_none() {
-                let numbered = facts.text(Field::Title).map(|t| crate::file_tags::number_in_title(&t)).unwrap_or_default();
-                let ours = match numbered {
-                    Some((number, title)) if ours.track.is_none_or(|t| t == number) => matching::Song { track: Some(number), title, ..ours },
-                    _ => ours,
-                };
-                if ours.track.is_some() && facts.text(Field::Title).is_some() {
-                    unnamed.push((song.imported, ours, rejected));
-                }
             }
             continue;
         };
@@ -172,40 +162,58 @@ pub fn albums_of<'s>(songs: impl Iterator<Item = (&'s str, &'s song_store::Song)
         }
     }
     albums.sort_by(|a, b| b.songs.len().cmp(&a.songs.len()).then_with(|| a.id.cmp(&b.id)));
-    albums.extend(batches(unnamed));
     // (Songs on no album last.)
     loose.sort_by(|a, b| a.id.cmp(&b.id));
     albums.extend(loose);
     albums
 }
 
-/// Numbered songs on no album and by nobody, with when each came in, as
-/// the batches they came in (`By::Batch`) of `matching::BATCH_SONGS` or
-/// more, with the releases any of them isn't on: known by their first
-/// song.
-fn batches(mut songs: Vec<(i64, matching::Song, Vec<String>)>) -> Vec<Album> {
-    songs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.key.cmp(&b.1.key)));
-    let mut batches: Vec<Album> = Vec::new();
-    let mut last = None;
-    for (at, song, rejected) in songs {
-        if last.is_none_or(|last| at - last > known::BATCH_GAP) {
-            batches.push(Album { id: String::new(), name: String::new(), artist: None, songs: Vec::new(), rejected: Vec::new(), by: By::Batch });
+/// The library's songs on no album and by nobody, but with a title and
+/// a track number (or one leading their title), that aren't matched: as
+/// one album of them (`By::Titles`), with the releases any of them isn't
+/// on.
+pub fn titled(store: &SongStore, ignore: &str) -> Album {
+    let mut album = Album { id: String::new(), name: "Songs on no album and by nobody".into(), artist: None, songs: Vec::new(), rejected: Vec::new(), by: By::Titles };
+    for (key, song) in store.known().filter(|(key, _)| !store.is_blocked(key)) {
+        let facts = Facts::of(song);
+        if is_midi(&song.name) || facts.release().is_some() || facts.text(Field::Artist).is_some() || own_album(song, &facts, ignore).is_some() {
+            continue;
         }
-        last = Some(at);
-        let batch = batches.last_mut().expect("a batch was started");
-        batch.songs.push(song);
-        for release in rejected {
-            if !batch.rejected.contains(&release) {
-                batch.rejected.push(release);
+        let Some(title) = facts.text(Field::Title) else { continue };
+        let track = facts.number(Field::Track).map(|n| n as u32);
+        let (track, title) = match crate::file_tags::number_in_title(&title) {
+            Some((number, rest)) if track.is_none_or(|t| t == number) => (Some(number), rest),
+            _ => (track, title.into_owned()),
+        };
+        if track.is_none() {
+            continue;
+        }
+        album.songs.push(matching::Song { key: key.to_string(), title, artist: None, track, disc: facts.number(Field::Disc).map(|n| n as u32), length: facts.number(Field::Length) });
+        for release in song.online.iter().flat_map(|o| &o.rejected) {
+            if !album.rejected.contains(release) {
+                album.rejected.push(release.clone());
             }
         }
     }
-    batches.retain(|batch| batch.songs.len() >= matching::BATCH_SONGS);
-    for batch in &mut batches {
-        batch.id = format!("batch:{}", batch.songs.iter().map(|s| s.key.as_str()).min().unwrap_or_default());
-        batch.name = format!("{} songs with no album or artist, imported together", batch.songs.len());
+    album.songs.sort_by(|a, b| a.key.cmp(&b.key));
+    album
+}
+
+/// The releases (by id) `titled` songs were found on (`Answer::Asked`, by
+/// `title:{key}`), each with how many of them, those on
+/// `matching::TITLES_SONGS` or more, the most first.
+fn found_on(titled: &Album, tried: &BTreeMap<String, Tried>) -> Vec<(String, usize)> {
+    let mut found: BTreeMap<&str, usize> = BTreeMap::new();
+    for song in &titled.songs {
+        if let Some(Tried { found: Answer::Asked(ids), .. }) = tried.get(&format!("title:{}", song.key)) {
+            for id in ids {
+                *found.entry(id).or_default() += 1;
+            }
+        }
     }
-    batches
+    let mut found: Vec<(String, usize)> = found.into_iter().filter(|(_, n)| *n >= matching::TITLES_SONGS).map(|(id, n)| (id.to_string(), n)).collect();
+    found.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+    found
 }
 
 /// Whether the lookup has something to do for `album`: a song of it
@@ -236,8 +244,8 @@ pub fn matches(album: &Album, release: &Release, tracks: &[Option<usize>], by_us
         .songs
         .iter()
         .zip(tracks)
-        // (A batch's songs not lined up with it aren't on it.)
-        .filter(|(_, track)| album.by != By::Batch || track.is_some())
+        // (Songs found by their titles not lined up with it aren't on it.)
+        .filter(|(_, track)| album.by != By::Titles || track.is_some())
         .map(|(song, track)| {
             let mut was = store.get_by_key(&song.key).and_then(|s| s.online.clone()).unwrap_or_default();
             // (Another release: its blanks are filled anew.)
@@ -328,13 +336,20 @@ pub enum Answer {
     Unsure(Vec<String>),
     NotFound,
     Failed,
+    /// Asked once, never again: what a song's title search found (the
+    /// releases, by id), or that a release several were found on was
+    /// lined up with them.
+    Asked(Vec<String>),
 }
 
 impl Tried {
     /// It's time to try again.
     pub fn due(&self, now: i64) -> bool {
-        let wait = if self.found == Answer::Failed { RETRY_FAILED } else { RETRY };
-        now - self.at >= wait
+        match self.found {
+            Answer::Asked(_) => false,
+            Answer::Failed => now - self.at >= RETRY_FAILED,
+            _ => now - self.at >= RETRY,
+        }
     }
 }
 
@@ -415,6 +430,11 @@ enum Ask {
     Release(String),
     /// Ask for an artist (by id), for the names they go by.
     Artist(String),
+    /// Look a song (by key) up by its title (`titled`).
+    Title(String, String),
+    /// Line the `titled` songs up with a release (by id) several of them
+    /// were found on.
+    Found(String, Album),
 }
 
 impl Ask {
@@ -425,6 +445,8 @@ impl Ask {
             Ask::Album(album, _) => album.id.clone(),
             Ask::Release(id) => format!("release:{id}"),
             Ask::Artist(id) => format!("artist:{id}"),
+            Ask::Title(key, _) => format!("title:{key}"),
+            Ask::Found(_, album) => album.id.clone(),
         }
     }
 }
@@ -456,6 +478,8 @@ pub enum Done {
     Album(Album, Outcome, Vec<Fill>),
     Release(String, Result<Release, String>),
     Artist(String, Result<artists::Artist, String>),
+    /// A song (by key) looked up by its title: the releases it was found on.
+    Title(String, Result<Vec<String>, String>),
 }
 
 /// The lookup thread: given a copy of the songs, it works out what to
@@ -515,6 +539,19 @@ impl Worker {
                         log::info!("asking for artist {id}");
                         let artist = musicbrainz.artist(&id).map_err(|e| format!("{e:#}"));
                         Done::Artist(id, artist)
+                    }
+                    Ask::Title(key, title) => {
+                        log::info!("looking up {title:?} by its title");
+                        Done::Title(key, musicbrainz.title_releases(&title).map_err(|e| format!("{e:#}")))
+                    }
+                    Ask::Found(release, album) => {
+                        log::info!("lining {} songs on no album up with release {release}", album.songs.len());
+                        let outcome = look_up_found(&mut musicbrainz, &album, &release);
+                        let fills = match &outcome {
+                            Outcome::Matched(release, tracks) => album_fills(&album, release, tracks, &genres, &ignore),
+                            _ => Vec::new(),
+                        };
+                        Done::Album(album, outcome, fills)
                     }
                 };
                 if !send(done) {
@@ -599,10 +636,21 @@ fn next(plan: &Plan, kept: &Kept, albums: &[Album]) -> Option<Ask> {
         return Some(Ask::Album(album.clone(), true));
     }
     let store = &plan.store;
+    let due = |id: &str| plan.tried.get(id).is_none_or(|t| t.due(now));
     albums
         .iter()
-        .find(|a| plan.tried.get(&a.id).is_none_or(|t| t.due(now)) && wanted(store, a))
+        .find(|a| due(&a.id) && wanted(store, a))
         .map(|album| Ask::Album(album.clone(), false))
+        .or_else(|| {
+            // Songs on no album and by nobody: each looked up by its title
+            // once, then the releases several were found on.
+            let titled = titled(store, &plan.ignore);
+            if let Some(song) = titled.songs.iter().find(|s| due(&format!("title:{}", s.key))) {
+                return Some(Ask::Title(song.key.clone(), song.title.clone()));
+            }
+            let (release, _) = found_on(&titled, &plan.tried).into_iter().find(|(id, _)| due(&format!("found:{id}")))?;
+            Some(Ask::Found(release.clone(), Album { id: format!("found:{release}"), ..titled }))
+        })
         .or_else(|| {
             let ids: BTreeSet<String> = matched(store, |_| true).into_iter().map(|(_, release, _)| release).collect();
             let releases: Vec<Arc<Release>> = ids.iter().filter_map(|id| kept.release(id)).collect();
@@ -622,19 +670,28 @@ fn next(plan: &Plan, kept: &Kept, albums: &[Album]) -> Option<Ask> {
 }
 
 /// What a lookup makes of `album`: a song on no album by its recording,
-/// else by its releases (a batch's, found by its titles).
+/// else by its releases.
 pub fn look_up(musicbrainz: &mut musicbrainz::MusicBrainz, album: &Album, fresh: bool) -> Outcome {
-    let releases = match album.by {
-        By::Recording => return musicbrainz.recording(album, fresh).unwrap_or_else(|e| Outcome::Failed(format!("{e:#}"))),
-        By::Name => musicbrainz.releases(album, fresh),
-        By::Batch => musicbrainz.batch_releases(album, fresh),
-    };
-    let decide = if album.by == By::Batch { matching::decide_batch } else { matching::decide };
-    match releases {
-        Ok(releases) => match log_candidates(album, &releases, decide(album, &releases)) {
+    if album.by == By::Recording {
+        return musicbrainz.recording(album, fresh).unwrap_or_else(|e| Outcome::Failed(format!("{e:#}")));
+    }
+    match musicbrainz.releases(album, fresh) {
+        Ok(releases) => match log_candidates(album, &releases, matching::decide(album, &releases)) {
             Verdict::Match(i, tracks) => Outcome::Matched(Box::new(releases[i].clone()), tracks),
             Verdict::Unsure(found) => Outcome::Unsure(found.into_iter().map(|i| releases[i].clone()).collect()),
             Verdict::NotFound => Outcome::NotFound,
+        },
+        Err(e) => Outcome::Failed(format!("{e:#}")),
+    }
+}
+
+/// What lining the `titled` songs (`album`) up with `release` makes of
+/// them (`matching::decide_titles`).
+fn look_up_found(musicbrainz: &mut musicbrainz::MusicBrainz, album: &Album, release: &str) -> Outcome {
+    match musicbrainz.kept_or_fetched_release(release) {
+        Ok(release) => match matching::decide_titles(album, std::slice::from_ref(&release)) {
+            Verdict::Match(_, tracks) => Outcome::Matched(Box::new(release), tracks),
+            _ => Outcome::NotFound,
         },
         Err(e) => Outcome::Failed(format!("{e:#}")),
     }
@@ -646,27 +703,33 @@ mod tests {
     use crate::song_store::{META_VERSION, Meta, Song};
 
     #[test]
-    fn numbered_songs_by_nobody_are_looked_up_in_the_batches_they_came_in() {
-        let song = |imported, title: &str, track, artist: Option<&str>| Song {
+    fn numbered_songs_by_nobody_are_looked_up_by_title_then_on_releases_several_are_on() {
+        let song = |title: &str, track, artist: Option<&str>| Song {
             name: format!("{title}.ogg"),
-            imported,
             meta: Some(Meta { title: Some(title.into()), track, artist: artist.map(Into::into), version: META_VERSION, ..Meta::default() }),
             ..Song::default()
         };
-        let songs = [
-            ("a", song(100, "Theme", Some(1), None)),
-            ("b", song(130, "02. Bedtime", None, None)),
-            ("c", song(160, "Night Walk", Some(3), None)),
-            ("d", song(190, "Unnumbered", None, None)),
-            ("e", song(220, "By someone", Some(4), Some("Someone"))),
-            ("f", song(90_000, "Later", Some(1), None)),
-        ];
-        let albums = albums_of(songs.iter().map(|(k, s)| (*k, s)), "");
-        let batch: Vec<&Album> = albums.iter().filter(|a| a.by == By::Batch).collect();
-        assert_eq!(batch.len(), 1, "one that came in later is too few: {albums:?}");
-        assert_eq!(batch[0].id, "batch:a");
-        let titles: Vec<(&str, Option<u32>)> = batch[0].songs.iter().map(|s| (s.title.as_str(), s.track)).collect();
-        assert_eq!(titles, [("Theme", Some(1)), ("Bedtime", Some(2)), ("Night Walk", Some(3))], "numbered in its title too");
-        assert!(albums.iter().any(|a| a.id == "song:e" && a.by == By::Recording), "by someone: by its recording");
+        let key = |letter: &str| format!("{}.ogg", letter.repeat(64));
+        let dir = std::env::temp_dir().join(format!("synththing-titled-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut store = SongStore::open(dir);
+        store.learn([
+            (key("a"), song("Theme", Some(1), None)),
+            (key("b"), song("02. Bedtime", None, None)),
+            (key("c"), song("Night Walk", Some(3), None)),
+            (key("d"), song("Unnumbered", None, None)),
+            (key("e"), song("By someone", Some(4), Some("Someone"))),
+        ]);
+        let titled = titled(&store, "");
+        let titles: Vec<(&str, Option<u32>)> = titled.songs.iter().map(|s| (s.title.as_str(), s.track)).collect();
+        assert_eq!(titles, [("Theme", Some(1)), ("Bedtime", Some(2)), ("Night Walk", Some(3))], "numbered in its title too; not by someone");
+        let asked = |ids: &[&str]| Tried { at: 0, found: Answer::Asked(ids.iter().map(|i| i.to_string()).collect()) };
+        let mut tried = BTreeMap::new();
+        tried.insert(format!("title:{}", key("a")), asked(&["ost", "single"]));
+        tried.insert(format!("title:{}", key("b")), asked(&["ost", "other"]));
+        assert_eq!(found_on(&titled, &tried), [], "found on by two songs isn't enough");
+        tried.insert(format!("title:{}", key("c")), asked(&["ost"]));
+        assert_eq!(found_on(&titled, &tried), [("ost".to_string(), 3)]);
+        assert!(!asked(&[]).due(i64::MAX), "asked once");
     }
 }
