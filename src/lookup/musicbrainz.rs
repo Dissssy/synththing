@@ -315,6 +315,20 @@ impl MusicBrainz {
         Ok(release)
     }
 
+    /// The releases (by id) recordings named `title` are on, by
+    /// anyone: for a song on no album and by nobody (`matching::By::Titles`).
+    pub fn title_releases(&mut self, title: &str) -> Result<Vec<String>> {
+        let mut ids = Vec::new();
+        for hit in self.search_recordings(format!("recording:{}", quoted(title)), false)?.iter().map(hit) {
+            if matching::similar(title, &hit.title) >= 0.9 {
+                ids.extend(hit.releases.into_iter().map(|r| r.id));
+            }
+        }
+        ids.sort();
+        ids.dedup();
+        Ok(ids)
+    }
+
     /// The releases that might be `album`, with their tracks: the search's
     /// hits that are named like it, those most like it first. Asked for
     /// again if `fresh`, else from what's kept where it can be.

@@ -73,6 +73,7 @@ impl Group {
                 Kind::Same => "text-aa",
                 Kind::Compilation => "users-three",
                 Kind::Tidy => "broom",
+                Kind::OnMatchedAlbum => "vinyl-record",
                 Kind::MusicBrainz => "globe",
                 Kind::LengthDiffers => "timer",
             },
@@ -101,6 +102,7 @@ impl Rows {
     fn of(store: &SongStore, kept: &Kept, tried: Option<&BTreeMap<String, Tried>>, ignore: &str) -> Self {
         let mut suggestions = cleanup::suggest(store, ignore);
         lookup::artist_suggestions(store, kept, &mut suggestions, ignore);
+        suggestions.extend(crate::lookup::known::suggestions(store, kept));
         suggestions.extend(lookup::musicbrainz_suggestions(store, kept, ignore));
         let unsure = tried.map(|tried| lookup::unsure_albums(store, kept, tried, ignore)).unwrap_or_default();
         Self { suggestions, unsure }
@@ -319,6 +321,13 @@ impl App {
             self.remove_songs.extend(others.iter().map(|k| self.songs.path(k)));
             self.remove_everywhere = true;
         }
+        let (tracks, apply): (Vec<usize>, Vec<usize>) = apply.into_iter().partition(|&i| cleanup.suggestions[i].kind == Kind::OnMatchedAlbum);
+        for &i in &tracks {
+            if let What::Tracks { release, tracks, .. } = &cleanup.suggestions[i].what {
+                self.match_tracks(release, &cleanup.suggestions[i].keys, tracks);
+            }
+        }
+        let applied: Vec<usize> = tracks.iter().chain(&apply).copied().collect();
         if !apply.is_empty() {
             let chosen: Vec<(&Suggestion, &str)> = apply
                 .iter()
@@ -337,10 +346,12 @@ impl App {
                 self.songs_changed();
                 self.status = format!("Cleaned up {songs} song{}.", if songs == 1 { "" } else { "s" });
             }
+        }
+        if !applied.is_empty() {
             let mut i = 0;
             cleanup.suggestions.retain(|_| {
                 i += 1;
-                !apply.contains(&(i - 1))
+                !applied.contains(&(i - 1))
             });
         }
         if !dismiss.is_empty() || bring_back {
@@ -444,7 +455,7 @@ fn suggestion_row_ui(
             act = Some(Act::Dismiss);
         }
         let fixed = matches!(suggestion.kind, Kind::Compilation | Kind::Junk | Kind::Duplicate | Kind::PossibleDuplicate)
-            || matches!(suggestion.what, What::Fields { .. } | What::Online { .. });
+            || matches!(suggestion.what, What::Fields { .. } | What::Online { .. } | What::Tracks { .. });
         let look = suggestion.kind == Kind::LengthDiffers;
         if !look && ui.add_enabled(fixed || !to.trim().is_empty(), icon_button("check")).on_hover_text("Apply").clicked() {
             act = Some(Act::Apply);
@@ -505,6 +516,16 @@ fn describe(suggestion: &Suggestion) -> (String, String) {
                 lines.push(format!("and {} more", changes.len() - 20));
             }
             (format!("{album}: {}", field.label()), format!("{} on {album}, as MusicBrainz has it:\n{}", field.label(), lines.join("\n")))
+        }
+        What::Tracks { album, .. } => {
+            let n = suggestion.keys.len();
+            (
+                album.clone(),
+                format!(
+                    "{n} song{} on no album, with the titles of tracks {album} is missing here (and their numbers, lengths, or coming in with its songs). Applying matches each to its track, so the details it lacks are filled in from MusicBrainz. See them with the info button.",
+                    if n == 1 { "" } else { "s" }
+                ),
+            )
         }
         What::Length { title, .. } => (
             title.clone(),

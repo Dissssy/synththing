@@ -57,6 +57,9 @@ pub enum Kind {
     Compilation,
     /// Stray quotes, brackets or spacing.
     Tidy,
+    /// Songs on no album that are a matched album's missing tracks
+    /// (`lookup::known`): match them to it.
+    OnMatchedAlbum,
     /// What MusicBrainz says otherwise of a matched album's songs.
     MusicBrainz,
     /// A matched song far from its track's length: another version, or
@@ -77,6 +80,7 @@ impl Kind {
             Kind::Same => "Same name",
             Kind::Compilation => "Compilation",
             Kind::Tidy => "Tidy",
+            Kind::OnMatchedAlbum => "On a matched album",
             Kind::MusicBrainz => "From MusicBrainz",
             Kind::LengthDiffers => "Length differs",
         }
@@ -108,6 +112,9 @@ pub enum What {
     Length { title: String, here: f64, there: f64 },
     /// One recording's copies (`Suggestion::keys`, the best first).
     Duplicates { title: String },
+    /// Songs (`Suggestion::keys`) to match to a release (`album`), each
+    /// to its track (by index, in their order).
+    Tracks { release: String, album: String, tracks: Vec<usize> },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -139,6 +146,10 @@ impl Suggestion {
             What::Fields { group, .. } => format!("{:?}:{group}", self.kind),
             What::Online { field, release, .. } => format!("musicbrainz:{release}:{}", field.def().key),
             What::Length { .. } => format!("length:{}", self.keys.join("|")),
+            What::Tracks { release, .. } => {
+                let keys: BTreeSet<&str> = self.keys.iter().map(String::as_str).collect();
+                format!("tracks:{release}:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
+            }
             What::Duplicates { .. } => {
                 let keys: BTreeSet<&str> = self.keys.iter().map(String::as_str).collect();
                 format!("duplicate:{}", keys.into_iter().collect::<Vec<_>>().join("|"))
@@ -508,8 +519,9 @@ pub fn edits(store: &SongStore, chosen: &[(&Suggestion, &str)], ignore: &str) ->
             };
             match &suggestion.what {
                 // (Removed, not edited: `App::remove_songs`; merged and
-                // removed: `App::merge_duplicates`; or only to look at.)
-                What::AppleDouble | What::Duplicates { .. } | What::Length { .. } => {}
+                // removed: `App::merge_duplicates`; matched, not edited:
+                // `App::match_tracks`; or only to look at.)
+                What::AppleDouble | What::Duplicates { .. } | What::Length { .. } | What::Tracks { .. } => {}
                 What::Online { field, changes, .. } => {
                     if let Some((_, to)) = suggestion.keys.iter().position(|k| k == key).map(|i| &changes[i]) {
                         written.insert((key.clone(), *field), to.clone());

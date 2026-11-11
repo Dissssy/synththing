@@ -21,8 +21,22 @@ pub struct Album {
     pub songs: Vec<Song>,
     /// Releases it's been matched to and isn't (Wrong match).
     pub rejected: Vec<String>,
-    /// It's a song on no album (its one song), looked up by its recording.
-    pub loose: bool,
+    /// How it's looked up.
+    pub by: By,
+}
+
+/// How an album's looked up.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum By {
+    /// By its name (and artist): the library's albums.
+    Name,
+    /// By its one song's recording: a song on no album, by an artist.
+    Recording,
+    /// By its songs' titles, each looked up once: the library's songs on
+    /// no album and by nobody, with their track numbers, against a release
+    /// several of them were found on (`decide_titles`). Only those that
+    /// line up with it are matched to it.
+    Titles,
 }
 
 /// One of an album's songs.
@@ -199,7 +213,7 @@ fn same_artist(album: &Album, release: &Release) -> bool {
 /// A song's title as a track would have it: without a file's extension
 /// ("Tempest.mp3"), a leading track number ("27. Luke") or the album's
 /// name before it ("X-Morph Defense - 12 Dark Hour").
-fn track_title<'t>(title: &'t str, album: &str) -> &'t str {
+pub fn track_title<'t>(title: &'t str, album: &str) -> &'t str {
     let mut title = title.trim();
     for ext in [".mp3", ".flac", ".ogg", ".wav", ".m4a", ".opus"] {
         if title.len() > ext.len() && title.is_char_boundary(title.len() - ext.len()) && title[title.len() - ext.len()..].eq_ignore_ascii_case(ext) {
@@ -315,6 +329,40 @@ pub fn decide(album: &Album, releases: &[Release]) -> Verdict {
     let group = |i: usize| releases[i].group.as_deref().unwrap_or(&releases[i].id);
     let rivals: Vec<usize> = candidates.iter().copied().filter(|&i| group(i) != group(best) && fits[i].score >= fits[best].score - 0.02).collect();
     if rivals.is_empty() { Verdict::Match(best, fits[best].tracks.clone()) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
+}
+
+/// How many of the library's numbered songs (at least) must line up
+/// with a release, numbered as its tracks are, for it to be theirs.
+pub const TITLES_SONGS: usize = 3;
+
+/// Which of `releases` the library's numbered songs on no album
+/// (`By::Titles`) are on, if one surely is: the one with the most of them
+/// lined up with its tracks and numbered as they are, at least
+/// `TITLES_SONGS`. Only the songs lined up with it are matched; a release
+/// of another album as good leaves it to a person.
+pub fn decide_titles(album: &Album, releases: &[Release]) -> Verdict {
+    let fits: Vec<Fit> = releases.iter().map(|r| fit(album, r)).collect();
+    let placed = |i: usize| {
+        let release = &releases[i];
+        album.songs.iter().zip(&fits[i].tracks).filter(|(song, track)| track.is_some_and(|t| song.track == Some(release.tracks[t].position))).count()
+    };
+    let counts: Vec<usize> = (0..releases.len()).map(|i| if album.rejected.contains(&releases[i].id) { 0 } else { placed(i) }).collect();
+    let mut candidates: Vec<usize> = (0..releases.len()).filter(|&i| counts[i] >= TITLES_SONGS).collect();
+    if candidates.is_empty() {
+        return Verdict::NotFound;
+    }
+    candidates.sort_by(|&a, &b| {
+        counts[b].cmp(&counts[a]).then_with(|| {
+            let rank = |r: &Release| (!r.official, !r.front, r.date.clone().unwrap_or_else(|| "9999".into()));
+            rank(&releases[a]).cmp(&rank(&releases[b]))
+        })
+    });
+    let best = candidates[0];
+    let group = |i: usize| releases[i].group.as_deref().unwrap_or(&releases[i].id);
+    let rivals: Vec<usize> = candidates.iter().copied().filter(|&i| group(i) != group(best) && counts[i] >= counts[best]).collect();
+    // (Songs that don't line up with it stay as they are.)
+    let tracks = album.songs.iter().zip(&fits[best].tracks).map(|(song, track)| track.filter(|&t| song.track == Some(releases[best].tracks[t].position))).collect();
+    if rivals.is_empty() { Verdict::Match(best, tracks) } else { Verdict::Unsure(std::iter::once(best).chain(rivals).collect()) }
 }
 
 /// A recording a search for a song found, with the releases it's on.
@@ -454,6 +502,25 @@ pub fn first_name(names: &str) -> &str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn numbered_songs_are_on_the_release_three_of_them_line_up_with() {
+        let ost = release("ost", "g1", "Mr. Sleepy Man Soundtrack", "Devin Santi", &[("Mr. Sleepy Man Theme", 151.0), ("Bedtime", 90.0), ("Night Walk", 120.0), ("Wake Up", 80.0)]);
+        let other = release("other", "g2", "Another Game OST", "Someone", &[("Bedtime", 90.0), ("Morning", 60.0)]);
+        let ours = |songs: Vec<Song>| Album { id: "found:ost".into(), name: "found".into(), artist: None, songs, rejected: Vec::new(), by: By::Titles };
+        let many = ours(vec![song("Mr. Sleepy Man Theme", 1, 150.0), song("Bedtime", 2, 91.0), song("Night Walk", 3, 119.0), song("Wake Up", 7, 80.0), song("Unrelated", 9, 30.0)]);
+        assert_eq!(
+            decide_titles(&many, &[other.clone(), ost.clone()]),
+            Verdict::Match(1, vec![Some(0), Some(1), Some(2), None, None]),
+            "three line up; one numbered otherwise stays"
+        );
+        let few = ours(vec![song("Mr. Sleepy Man Theme", 1, 150.0), song("Bedtime", 2, 91.0), song("Other", 3, 10.0), song("More", 4, 10.0)]);
+        assert_eq!(decide_titles(&few, std::slice::from_ref(&ost)), Verdict::NotFound, "two lined up aren't enough");
+        let misnumbered = ours(vec![song("Mr. Sleepy Man Theme", 7, 150.0), song("Bedtime", 8, 91.0), song("Night Walk", 9, 119.0)]);
+        assert_eq!(decide_titles(&misnumbered, std::slice::from_ref(&ost)), Verdict::NotFound, "numbered otherwise");
+        let rejected = Album { rejected: vec!["ost".into()], ..many };
+        assert_eq!(decide_titles(&rejected, &[ost]), Verdict::NotFound, "Wrong match");
+    }
+
     fn song(title: &str, track: u32, length: f64) -> Song {
         Song { key: title.into(), title: title.into(), track: Some(track), length: Some(length), ..Song::default() }
     }
@@ -483,7 +550,7 @@ mod tests {
     }
 
     fn album(songs: Vec<Song>) -> Album {
-        Album { id: "a".into(), name: "Modal Soul".into(), artist: Some("Nujabes".into()), songs, rejected: Vec::new(), loose: false }
+        Album { id: "a".into(), name: "Modal Soul".into(), artist: Some("Nujabes".into()), songs, rejected: Vec::new(), by: By::Name }
     }
 
     #[test]

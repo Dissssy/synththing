@@ -80,6 +80,21 @@ impl App {
                     self.lookup.albums = Some((planned.revision, planned.albums));
                 }
                 Done::Album(album, outcome, fills) => self.lookup_answered(&album, outcome, fills),
+                Done::Title(key, found) => {
+                    let found = match found {
+                        Ok(ids) => {
+                            self.lookup.error = None;
+                            Answer::Asked(ids)
+                        }
+                        Err(e) => {
+                            log::warn!("couldn't look song {key} up by its title: {e}");
+                            self.lookup.error = Some(e);
+                            Answer::Failed
+                        }
+                    };
+                    let at = crate::settings_sync::now();
+                    self.lookup.state.get_or_insert_with(State::load).note(&format!("title:{key}"), Some(Tried { at, found }));
+                }
                 Done::Release(id, release) => self.release_refreshed(&id, release),
                 Done::Artist(_, Ok(artist)) => {
                     self.lookup.kept.keep_artist(artist);
@@ -168,6 +183,13 @@ impl App {
                 Some(Tried { at, found: Answer::Failed })
             }
         };
+        // (Songs lined up with a release they were found on by their
+        // titles: once, whatever came of it, unless it failed.)
+        let tried = match tried {
+            Some(Tried { found: Answer::Failed, .. }) => tried,
+            _ if album.by == matching::By::Titles => Some(Tried { at, found: Answer::Asked(Vec::new()) }),
+            _ => tried,
+        };
         self.lookup.state.get_or_insert_with(State::load).note(&album.id, tried);
     }
 
@@ -243,7 +265,7 @@ impl App {
         // to look up.)
         let mut counts = [[0; 4]; 2];
         for album in albums {
-            let counts = &mut counts[usize::from(album.loose)];
+            let counts = &mut counts[usize::from(album.by == matching::By::Recording)];
             let at = if !lookup::wanted(&self.songs, album) {
                 0
             } else {
@@ -379,6 +401,35 @@ impl App {
             })
             .collect();
         log::info!("{} songs aren't on release {release}", changes.len());
+        self.songs.set_online(changes);
+        self.songs_changed();
+        self.lookup.idle_until = None;
+    }
+
+    /// Match the songs `keys` to the release `release` (as kept here),
+    /// each to its track in `tracks` (by index), as picked: their blanks
+    /// are filled in from it, as a match's are.
+    pub(super) fn match_tracks(&mut self, release: &str, keys: &[String], tracks: &[usize]) {
+        let Some(release) = self.lookup.kept.release(release) else { return };
+        let at = crate::settings_sync::now();
+        let changes: Vec<(String, Option<Online>)> = keys
+            .iter()
+            .zip(tracks)
+            .filter_map(|(key, &t)| {
+                let was = self.songs.get_by_key(key)?.online.clone().unwrap_or_default();
+                let online = Online {
+                    release: Some(release.id.clone()),
+                    group: release.group.clone(),
+                    recording: release.tracks.get(t)?.recording.clone(),
+                    by_user: true,
+                    at,
+                    filled: None,
+                    ..was
+                };
+                Some((key.clone(), Some(online)))
+            })
+            .collect();
+        log::info!("{} songs are on release {} ({:?}), as picked", changes.len(), release.id, release.title);
         self.songs.set_online(changes);
         self.songs_changed();
         self.lookup.idle_until = None;

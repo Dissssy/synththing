@@ -88,6 +88,30 @@ struct RulesetView {
     selection: select_list::Selection,
     /// The groups shown, in order, and what that was worked out from.
     shown: Option<(u64, Vec<usize>)>,
+    /// Picking the song that's one of the open album's missing tracks.
+    matching: Option<Matching>,
+}
+
+/// Picking the song in the library that's a release's missing track, in
+/// place of its album's songs: the likeliest first ("find in" narrows
+/// them).
+struct Matching {
+    /// The album (its group's key) whose track it is.
+    album: String,
+    release: String,
+    /// The track (by index), and its title.
+    track: usize,
+    title: String,
+    songs: Vec<Pickable>,
+}
+
+/// A song to pick, as it's listed: its name, its album and artist, and
+/// its length.
+struct Pickable {
+    key: String,
+    name: String,
+    detail: String,
+    length: Option<f64>,
 }
 
 /// A song on a group's page.
@@ -109,6 +133,9 @@ struct Track {
     /// A watched artist's album not here: the wish for it, if it isn't
     /// wished for yet.
     wish: Option<crate::wishlist::Wish>,
+    /// A missing track of a release: the release, and the track (by
+    /// index), for a song in the library to be matched to it.
+    track_of: Option<(String, usize)>,
 }
 
 /// The open group's page rows, and what they were made from: the songs'
@@ -189,6 +216,11 @@ enum Act {
     WishArtist(crate::wishlist::Wish),
     Unwish(String),
     GoToWishlist,
+    /// Pick the song in the library that's this release's track (by
+    /// index).
+    MatchIn(String, usize),
+    /// Match the song (by key) to this release's track (by index).
+    Match(String, String, usize),
 }
 
 /// "3 songs": how many of `what` (singular) there are.
@@ -418,6 +450,20 @@ impl App {
             Some(Act::WishArtist(wish)) => self.wish_for_artist(ui.ctx(), wish),
             Some(Act::Unwish(id)) => self.unwish(&id),
             Some(Act::GoToWishlist) => self.go_to_wishlist(),
+            Some(Act::MatchIn(release, track)) => {
+                let view = self.groupings.view();
+                let album = view.open.clone().unwrap_or_default();
+                let matching = self.matching(album, release, track);
+                let view = self.groupings.view();
+                view.find.clear();
+                view.matching = matching;
+            }
+            Some(Act::Match(release, key, track)) => {
+                self.match_tracks(&release, std::slice::from_ref(&key), &[track]);
+                let view = self.groupings.view();
+                view.find.clear();
+                view.matching = None;
+            }
             Some(Act::Shuffle(_)) | None => {}
         }
     }
@@ -592,12 +638,19 @@ impl App {
         }
     }
 
-    /// Back from the open group's (or playlist's) page.
+    /// Back from the open group's (or playlist's) page, or from picking
+    /// a song on it.
     pub(super) fn grouping_back(&mut self) {
         if self.groupings.shown() == PLAYLISTS {
             self.open_playlist(None);
         } else {
-            self.groupings.view().open = None;
+            let view = self.groupings.view();
+            // (Picking a song for a missing track: back to its album.)
+            if view.matching.take().is_some() {
+                view.find.clear();
+            } else {
+                view.open = None;
+            }
         }
     }
 
@@ -932,6 +985,7 @@ impl App {
                     here,
                     missing: false,
                     wish: None,
+                    track_of: None,
                     path,
                 }
             })
@@ -956,16 +1010,11 @@ impl App {
             return tracks;
         };
         let facts: Vec<Facts> = group.songs.iter().filter_map(|key| self.songs.get_by_key(key)).map(Facts::of).collect();
-        let on_it: Vec<&Facts> = facts.iter().filter(|f| f.release() == Some(release.id.as_str())).collect();
-        let missing: Vec<Track> = release
-            .tracks
-            .iter()
-            .filter(|t| {
-                let recorded = |f: &&Facts| t.recording.is_some() && f.recording() == t.recording.as_deref();
-                let placed = |f: &&Facts| f.number(Field::Disc).unwrap_or(1.0) as u32 == t.disc && f.number(Field::Track).map(|n| n as u32) == Some(t.position);
-                !on_it.iter().any(|f| recorded(f) || placed(f))
-            })
-            .map(|t| Track {
+        let on_it: Vec<Facts> = facts.into_iter().filter(|f| f.release() == Some(release.id.as_str())).collect();
+        let missing: Vec<Track> = crate::lookup::known::missing(&release, &on_it)
+            .into_iter()
+            .map(|i| (i, &release.tracks[i]))
+            .map(|(i, t)| Track {
                 path: PathBuf::from(format!("musicbrainz:{}/{}/{}", release.id, t.disc, t.position)),
                 name: t.title.clone(),
                 artists: Vec::new(),
@@ -977,6 +1026,7 @@ impl App {
                 here: false,
                 missing: true,
                 wish: None,
+                track_of: Some((release.id.clone(), i)),
             })
             .collect();
         if !missing.is_empty() {
@@ -1019,6 +1069,7 @@ impl App {
                     here: false,
                     missing: true,
                     wish,
+                    track_of: None,
                 }
             })
             .collect()
@@ -1047,15 +1098,27 @@ impl App {
         let mut artist_picture: Option<bool> = None;
         let ignore = self.config.group_ignore.clone();
         let view = self.groupings.view();
+        // (Picking a song for another album's track: it's left.)
+        if view.matching.as_ref().is_some_and(|m| m.album != group.key) {
+            view.matching = None;
+        }
         ui.horizontal(|ui| {
             // (A phone's top bar has Back.)
-            if !phone && ui.add(icon_button("arrow-left")).on_hover_text(format!("Back to {}", ruleset.name)).clicked() {
+            if view.matching.is_some() {
+                if ui.add(icon_button("arrow-left")).on_hover_text(format!("Back to {}", group.title)).clicked() {
+                    view.matching = None;
+                    view.find.clear();
+                }
+            } else if !phone && ui.add(icon_button("arrow-left")).on_hover_text(format!("Back to {}", ruleset.name)).clicked() {
                 view.open = None;
             }
             ui.add(egui::TextEdit::singleline(&mut view.find).hint_text("find in here...").desired_width(f32::INFINITY));
         });
         if view.open.is_none() {
             return None;
+        }
+        if let Some(matching) = &view.matching {
+            return matching_ui(ui, matching, &view.find);
         }
 
         enum Row {
@@ -1221,6 +1284,11 @@ impl App {
                 if output.info {
                     act = Some(Act::Info(track.path.clone()));
                 }
+                if output.match_in
+                    && let Some((release, t)) = &track.track_of
+                {
+                    act = Some(Act::MatchIn(release.clone(), *t));
+                }
                 if let Some(next) = output.queue {
                     act = Some(Act::Queue(vec![track.path.clone()], next));
                 }
@@ -1240,11 +1308,80 @@ impl App {
     }
 }
 
+impl App {
+    /// Picking the song that's `release`'s track `track` (by index), if
+    /// the release is kept here.
+    fn matching(&self, album: String, release: String, track: usize) -> Option<Matching> {
+        let kept = self.lookup.kept.release(&release)?;
+        let title = kept.tracks.get(track)?.title.clone();
+        let songs = crate::lookup::known::candidates(&self.songs, &kept, track)
+            .into_iter()
+            .filter_map(|key| {
+                let song = self.songs.get_by_key(&key)?;
+                let facts = Facts::of(song);
+                let name = facts.text(Field::Title).map_or_else(|| song.name.clone(), |t| t.into_owned());
+                let detail = [facts.text(Field::Album), facts.text(Field::Artist)].into_iter().flatten().collect::<Vec<_>>().join(" \u{b7} ");
+                Some(Pickable { key, name, detail, length: facts.number(Field::Length) })
+            })
+            .collect();
+        Some(Matching { album, release, track, title, songs })
+    }
+}
+
+/// Picking the song that's a missing track: what's being picked, then
+/// the songs (those `find` names), a click matching one.
+fn matching_ui(ui: &mut egui::Ui, matching: &Matching, find: &str) -> Option<Act> {
+    ui.add_space(4.0);
+    ui.label(egui::RichText::new(format!("Which of your songs is \u{201c}{}\u{201d}?", matching.title)).strong());
+    ui.weak("Pick it to match it to this track. Its album, artist and number are filled in from MusicBrainz where it has none.");
+    ui.add_space(4.0);
+    let words: Vec<String> = find.to_lowercase().split_whitespace().map(str::to_string).collect();
+    let shown: Vec<&Pickable> = matching
+        .songs
+        .iter()
+        .filter(|s| {
+            let text = format!("{} {}", s.name, s.detail).to_lowercase();
+            words.iter().all(|w| text.contains(w.as_str()))
+        })
+        .collect();
+    if shown.is_empty() {
+        super::placeholder(ui, "No songs like that.");
+        return None;
+    }
+    let row = row_height(ui);
+    let heights = vec![row; shown.len()];
+    let mut act = None;
+    virtual_rows(ui, ("matching", &matching.release, matching.track), &heights, |ui, rect, i| {
+        let song = shown[i];
+        let response = ui.interact(rect, ui.scope_id().with(("pick", &song.key)), egui::Sense::click()).on_hover_text("Match it to this track");
+        select_list::paint_row(ui, rect, &response, i, false, false, true);
+        if response.clicked() {
+            act = Some(Act::Match(matching.release.clone(), song.key.clone(), matching.track));
+        }
+        let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center));
+        ui.scope_builder(builder, |ui| {
+            ui.style_mut().interaction.selectable_labels = false;
+            ui.add_space(select_list::EDGE);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(select_list::EDGE);
+                if let Some(length) = song.length {
+                    ui.label(egui::RichText::new(format_length(length)).weak());
+                }
+                if !song.detail.is_empty() {
+                    ui.add_sized([220.0, rect.height()], egui::Label::new(egui::RichText::new(&song.detail).weak()).truncate());
+                }
+                select_list::label(ui, song.name.as_str(), None, false);
+            });
+        });
+    });
+    act
+}
+
 /// What a song not here yet says on hover.
 const NOT_HERE: &str = "Not on this device yet: it's coming from your other devices";
 
 /// What a song of an album that isn't in the library says on hover.
-const MISSING: &str = "Not in your library: it's on this album at MusicBrainz";
+const MISSING: &str = "Not in your library: it's on this album at MusicBrainz (right-click if a song in your library is it)";
 
 /// What a watched artist's album not here says on hover.
 const MISSING_ALBUM: &str = "Not in your library: one of their albums at MusicBrainz (right-click to wish for it)";
@@ -1261,6 +1398,8 @@ struct RowOutput {
     change: Option<Change>,
     /// Wish for the album it is (a watched artist's, not here).
     wish: bool,
+    /// Pick the song in the library that's this missing track.
+    match_in: bool,
 }
 
 /// A change to where a song is in the set it plays together with.
@@ -1315,6 +1454,10 @@ fn track_row(ui: &mut egui::Ui, rect: egui::Rect, track: &Track, artist: Option<
     } else if track.wish.is_some() {
         crate::menu::context(&response, |ui| {
             output.wish = ui.button("Wish for this album").clicked();
+        });
+    } else if track.track_of.is_some() {
+        crate::menu::context(&response, |ui| {
+            output.match_in = ui.button("Match a song in your library...").clicked();
         });
     }
     let builder = egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center));
