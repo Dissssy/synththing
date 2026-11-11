@@ -384,6 +384,35 @@ impl App {
         self.lookup.idle_until = None;
     }
 
+    /// Match the songs `keys` to the release `release` (as kept here),
+    /// each to its track in `tracks` (by index), as picked: their blanks
+    /// are filled in from it, as a match's are.
+    pub(super) fn match_tracks(&mut self, release: &str, keys: &[String], tracks: &[usize]) {
+        let Some(release) = self.lookup.kept.release(release) else { return };
+        let at = crate::settings_sync::now();
+        let changes: Vec<(String, Option<Online>)> = keys
+            .iter()
+            .zip(tracks)
+            .filter_map(|(key, &t)| {
+                let was = self.songs.get_by_key(key)?.online.clone().unwrap_or_default();
+                let online = Online {
+                    release: Some(release.id.clone()),
+                    group: release.group.clone(),
+                    recording: release.tracks.get(t)?.recording.clone(),
+                    by_user: true,
+                    at,
+                    filled: None,
+                    ..was
+                };
+                Some((key.clone(), Some(online)))
+            })
+            .collect();
+        log::info!("{} songs are on release {} ({:?}), as picked", changes.len(), release.id, release.title);
+        self.songs.set_online(changes);
+        self.songs_changed();
+        self.lookup.idle_until = None;
+    }
+
     /// What Clean up's rows from the lookup are made from, besides the
     /// songs: what it's tried, on the device that looks albums up.
     pub(super) fn lookup_tried(&mut self) -> Option<BTreeMap<String, Tried>> {

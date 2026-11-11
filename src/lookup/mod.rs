@@ -8,11 +8,13 @@
 //! (`matching::pick_recording`), and a match's release is asked for again
 //! every six months (`REFRESH`), for what's changed since. Each artist
 //! matched songs credit is asked for once, for the names they go by
-//! (`artists`).
+//! (`artists`). Songs on no album that are a matched album's missing
+//! tracks are offered in Clean up (`known`).
 
 pub mod art;
 pub mod artists;
 pub mod details;
+pub mod known;
 pub mod lrclib;
 pub mod matching;
 pub mod musicbrainz;

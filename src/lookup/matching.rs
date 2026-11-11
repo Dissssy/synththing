@@ -199,7 +199,7 @@ fn same_artist(album: &Album, release: &Release) -> bool {
 /// A song's title as a track would have it: without a file's extension
 /// ("Tempest.mp3"), a leading track number ("27. Luke") or the album's
 /// name before it ("X-Morph Defense - 12 Dark Hour").
-fn track_title<'t>(title: &'t str, album: &str) -> &'t str {
+pub fn track_title<'t>(title: &'t str, album: &str) -> &'t str {
     let mut title = title.trim();
     for ext in [".mp3", ".flac", ".ogg", ".wav", ".m4a", ".opus"] {
         if title.len() > ext.len() && title.is_char_boundary(title.len() - ext.len()) && title[title.len() - ext.len()..].eq_ignore_ascii_case(ext) {

@@ -956,15 +956,10 @@ impl App {
             return tracks;
         };
         let facts: Vec<Facts> = group.songs.iter().filter_map(|key| self.songs.get_by_key(key)).map(Facts::of).collect();
-        let on_it: Vec<&Facts> = facts.iter().filter(|f| f.release() == Some(release.id.as_str())).collect();
-        let missing: Vec<Track> = release
-            .tracks
-            .iter()
-            .filter(|t| {
-                let recorded = |f: &&Facts| t.recording.is_some() && f.recording() == t.recording.as_deref();
-                let placed = |f: &&Facts| f.number(Field::Disc).unwrap_or(1.0) as u32 == t.disc && f.number(Field::Track).map(|n| n as u32) == Some(t.position);
-                !on_it.iter().any(|f| recorded(f) || placed(f))
-            })
+        let on_it: Vec<Facts> = facts.into_iter().filter(|f| f.release() == Some(release.id.as_str())).collect();
+        let missing: Vec<Track> = crate::lookup::known::missing(&release, &on_it)
+            .into_iter()
+            .map(|t| &release.tracks[t])
             .map(|t| Track {
                 path: PathBuf::from(format!("musicbrainz:{}/{}/{}", release.id, t.disc, t.position)),
                 name: t.title.clone(),
