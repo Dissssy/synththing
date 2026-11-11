@@ -913,6 +913,22 @@ impl App {
                 let label = egui::RichText::new(format!("{problems} problem{}", if problems == 1 { "" } else { "s" }))
                     .color(color);
                 ui.menu_button(label, |ui| {
+                    if ui.button("Copy all").on_hover_text("Copy every problem, one per line").clicked() {
+                        let text: Vec<String> = analysis
+                            .diagnostics
+                            .iter()
+                            .map(|d| {
+                                let severity = match d.severity {
+                                    Severity::Error => "error",
+                                    Severity::Warning => "warning",
+                                };
+                                format!("line {}: {severity}: {}", d.line, d.message)
+                            })
+                            .collect();
+                        ui.ctx().copy_text(text.join("\n"));
+                        ui.close();
+                    }
+                    ui.separator();
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for d in &analysis.diagnostics {
                             let text = egui::RichText::new(format!("{}: {}", d.line, d.message)).color(severity_color(ui.visuals(), d.severity));
