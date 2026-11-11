@@ -200,12 +200,11 @@ impl Engine {
         let mut seq = MidiFileSequencer::new(synth);
         seq.set_speed(self.speed);
 
-        let target = self.position();
+        seq.set_channel_mask(self.channel_mask());
         if let Some(midi) = &self.midi {
             seq.play(midi, false);
-            fast_forward(&mut seq, target, self.sample_rate);
+            seq.seek(self.position());
         }
-        seq.set_channel_mask(self.channel_mask());
 
         self.live = match LiveSynth::new(&soundfont, self.sample_rate) {
             Ok(live) => Some(live),
@@ -379,8 +378,8 @@ impl Engine {
         }
     }
 
-    /// Seek to an absolute position in seconds. For MIDI, rustysynth has no
-    /// seek, so we restart the sequence and fast-forward through it silently;
+    /// Seek to an absolute position in seconds. For MIDI, the sequencer jumps
+    /// there by replaying the score's controller state (no audio rendered);
     /// for a decoded audio file it's just moving the read head.
     pub fn seek(&mut self, target: f64) {
         self.generation += 1;
@@ -394,15 +393,13 @@ impl Engine {
             return;
         }
 
-        let Some(midi) = self.midi.clone() else {
+        if self.midi.is_none() {
             return;
-        };
+        }
         let Some(seq) = self.seq.as_mut() else {
             return;
         };
-        seq.play(&midi, false);
-        seq.set_speed(self.speed);
-        fast_forward(seq, target, self.sample_rate);
+        seq.seek(target);
         self.finished = seq.end_of_sequence();
     }
 
@@ -512,40 +509,6 @@ fn render_audio_file(
     reached_end
 }
 
-/// Restart-and-scan seek helper. Renders the sequence into a throwaway buffer at
-/// an inflated speed until the target position is reached, then restores speed.
-fn fast_forward(seq: &mut MidiFileSequencer, target: f64, _sample_rate: u32) {
-    if target <= 0.0 {
-        return;
-    }
-    let saved = seq.get_speed();
-    let mut l = [0.0f32; 1024];
-    let mut r = [0.0f32; 1024];
-    let mut guard: u32 = 0;
-
-    // Coarse pass: race to ~1s before the target.
-    seq.set_speed(32.0);
-    while seq.get_position() < target - 1.0 && !seq.end_of_sequence() {
-        seq.render(&mut l, &mut r);
-        guard += 1;
-        if guard > 2_000_000 {
-            break;
-        }
-    }
-
-    // Fine pass: close the last stretch with small steps.
-    seq.set_speed(4.0);
-    while seq.get_position() < target && !seq.end_of_sequence() {
-        seq.render(&mut l, &mut r);
-        guard += 1;
-        if guard > 2_000_000 {
-            break;
-        }
-    }
-
-    seq.set_speed(saved);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -606,5 +569,30 @@ mod tests {
         assert!(left < playing * 1e-4, "silence: {left} against {playing} playing");
         engine.enable_all_channels();
         assert!(loudness(&mut engine) > 0.0);
+    }
+
+    /// Seeking a MIDI jumps straight to the target (no audio rendered on the
+    /// way) and plays on from there.
+    #[test]
+    fn midi_seek_jumps_to_target() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let soundfont = Arc::new(
+            SoundFont::new(&mut std::fs::File::open(root.join("assets/starter/soundfonts/TimGM6mb.sf2")).unwrap()).unwrap(),
+        );
+        let bytes = std::fs::read(root.join("assets/starter/songs/In the Hall of the Mountain King.mid")).unwrap();
+        let midi = Arc::new(MidiFile::new(&mut bytes.as_slice()).unwrap());
+        let mut engine = Engine::new(44_100);
+        engine.set_soundfont(soundfont, "TimGM6mb".into()).unwrap();
+        engine.load_midi(midi.clone(), "Hall".into(), false);
+
+        let target = midi.get_length() / 2.0;
+        engine.seek(target);
+        assert_eq!(engine.position(), target);
+        assert!(!engine.finished);
+
+        let mut block = vec![0.0f32; 2048];
+        let heard: f32 = (0..20).map(|_| { engine.render_into(&mut block); block.iter().map(|s| s * s).sum::<f32>() }).sum();
+        assert!(heard > 0.0, "plays on after the seek");
+        assert!(engine.position() > target);
     }
 }

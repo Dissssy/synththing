@@ -151,8 +151,9 @@ struct Channel {
     dirty_since: Option<Instant>,
     /// Sync as soon as it can (after this, for a retry).
     wanted: Option<Instant>,
-    /// Just started syncing here: the next sync takes the server's leaves
-    /// where it has them, until one works.
+    /// The songs' blobs just started syncing here: the next sync takes the
+    /// server's leaves where it has them, until one works. (The others go
+    /// by their state: `adopts`.)
     adopt: bool,
 }
 
@@ -367,7 +368,7 @@ struct Job {
     blob: Blob,
     base: Fields,
     local: Fields,
-    /// Just turned on: the server's leaves win where it has them.
+    /// Not synced here yet: the server's leaves win where it has them.
     adopt: bool,
     choices: settings_sync::Choices,
 }
@@ -395,6 +396,14 @@ impl Outcome {
     fn revision(&self) -> i64 {
         self.revisions.iter().sum()
     }
+}
+
+/// Whether a blob's next sync takes the server's leaves where it has them:
+/// it hasn't synced here yet (turned on, or signed in, and no sync has
+/// worked since; an app restart or a failed try doesn't change that), so
+/// this device's leaves are its defaults, not changes to keep.
+fn adopts(state: &State) -> bool {
+    state.revision == 0
 }
 
 /// Merge with the server's leaves and write the result, until a write
@@ -853,6 +862,7 @@ impl DeviceSync {
         let Some(state) = State::load(blob.name()) else { return };
         let Some((server, server_key, identity, sync_key)) = self.sync_with(link) else { return };
         let choices = self.choices.clone();
+        let adopt = adopts(&state);
         let job = Job { server, server_key, identity, sync_key, blob, base: state.base, local: state.fields, adopt, choices };
         self.channel(blob).running = true;
         let tx = self.events.0.clone();
@@ -1027,7 +1037,7 @@ impl DeviceSync {
         };
         let Some(sync_key) = identity::sync_key() else { return };
         match State::of(&sync_key, leaves).save(blob.name()) {
-            Ok(()) => *self.channel(blob) = Channel { wanted: Some(Instant::now()), adopt: true, ..Channel::default() },
+            Ok(()) => *self.channel(blob) = Channel { wanted: Some(Instant::now()), ..Channel::default() },
             Err(e) => self.error = Some(e),
         }
     }
@@ -1504,7 +1514,7 @@ mod tests {
         state
     }
 
-    fn job(base: &str, key: &str, identity: &Identity, state: &State, adopt: bool) -> Job {
+    fn job(base: &str, key: &str, identity: &Identity, state: &State) -> Job {
         Job {
             server: base.into(),
             server_key: key.into(),
@@ -1513,7 +1523,7 @@ mod tests {
             blob: Blob::Settings,
             base: state.base.clone(),
             local: state.fields.clone(),
-            adopt,
+            adopt: adopts(state),
             choices: state.choices.clone(),
         }
     }
@@ -1531,15 +1541,16 @@ mod tests {
 
         // The desktop turns it on first: its settings go up.
         let desktop = State::new(&[4; 32], &json!({ "theme": "dark", "shuffle": false, "editor_font_size": 14, "buffer_ms": 40 }));
-        let up = sync(job(&base, &key, &me, &desktop, true)).unwrap();
+        let up = sync(job(&base, &key, &me, &desktop)).unwrap();
         assert_eq!(up.revisions, [1]);
         assert!(up.changes.is_empty());
         let mut desktop = after(desktop, &up);
         assert!(!desktop.fields.contains_key("buffer_ms"), "the device's own");
 
-        // The phone turns it on: it takes the desktop's.
+        // The phone turns it on (or signs in with it on): until a sync works
+        // there, even after a restart or a failed try, it takes the desktop's.
         let phone = State::new(&[4; 32], &json!({ "theme": "light", "shuffle": true, "mini_player": true }));
-        let down = sync(job(&base, &key, &me, &phone, true)).unwrap();
+        let down = sync(job(&base, &key, &me, &phone)).unwrap();
         assert_eq!(down.merged["theme"].value, json!("dark"));
         assert_eq!(down.merged["mini_player"].value, json!(true), "the phone's own setting the server lacked goes up");
         assert_eq!(down.revisions, [2]);
@@ -1549,8 +1560,8 @@ mod tests {
         let now = settings_sync::now();
         desktop.record(&json!({ "theme": "dark", "shuffle": true, "editor_font_size": 16, "buffer_ms": 40 }), now + 5);
         phone.record(&json!({ "theme": "light", "shuffle": false, "editor_font_size": 18, "mini_player": true }), now + 10);
-        let first = sync(job(&base, &key, &me, &desktop, false)).unwrap();
-        let second = sync(job(&base, &key, &me, &phone, false)).unwrap();
+        let first = sync(job(&base, &key, &me, &desktop)).unwrap();
+        let second = sync(job(&base, &key, &me, &phone)).unwrap();
         assert_eq!(second.merged["theme"].value, json!("light"), "only the phone changed it");
         assert_eq!(second.merged["shuffle"].value, json!(true), "only the desktop changed it");
         assert_eq!(second.merged["editor_font_size"].value, json!(18), "changed on both: the newer change");
@@ -1559,7 +1570,7 @@ mod tests {
             [("editor_font_size", Some(Winner::ThisDevice)), ("shuffle", None)]
         );
         let desktop = after(desktop, &first);
-        let again = sync(job(&base, &key, &me, &desktop, false)).unwrap();
+        let again = sync(job(&base, &key, &me, &desktop)).unwrap();
         assert_eq!(again.merged, second.merged);
         assert_eq!(again.changes.iter().map(|c| c.path.as_str()).collect::<Vec<_>>(), ["editor_font_size", "theme"]);
 
@@ -1567,13 +1578,13 @@ mod tests {
         // and one changed on both devices takes the newer change.
         let playlist = |name: &str| json!({ "name": name, "songs": [] });
         let desktop_lists = State::of(&[4; 32], [("00000000000000aa".to_string(), playlist("Road trip"))].into());
-        let up = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &desktop_lists, true) }).unwrap();
+        let up = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &desktop_lists) }).unwrap();
         let mut desktop_lists = after(desktop_lists, &up);
         let phone_lists = State::of(&[4; 32], [("00000000000000bb".to_string(), playlist("Gym"))].into());
-        let down = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &phone_lists, true) }).unwrap();
+        let down = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &phone_lists) }).unwrap();
         assert_eq!(down.merged.len(), 2, "each device's playlists, on both");
         let mut phone_lists = after(phone_lists, &down);
-        let caught_up = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &desktop_lists, false) }).unwrap();
+        let caught_up = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &desktop_lists) }).unwrap();
         desktop_lists = after(desktop_lists, &caught_up);
         assert_eq!(desktop_lists.fields.len(), 2);
         desktop_lists.record_leaves([("00000000000000aa".to_string(), playlist("Road trip 2"))].into(), now + 20);
@@ -1581,8 +1592,8 @@ mod tests {
             [("00000000000000aa".to_string(), playlist("Roadtrip")), ("00000000000000bb".to_string(), playlist("Gym"))].into(),
             now + 30,
         );
-        sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &desktop_lists, false) }).unwrap();
-        let last = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &phone_lists, false) }).unwrap();
+        sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &desktop_lists) }).unwrap();
+        let last = sync(Job { blob: Blob::Playlists, ..job(&base, &key, &me, &phone_lists) }).unwrap();
         assert_eq!(last.merged["00000000000000aa"].value["name"], "Roadtrip", "the newer change");
         assert!(!last.merged.contains_key("00000000000000bb"), "removed on the desktop");
         // (The settings are untouched by all that.)
@@ -1611,7 +1622,7 @@ mod tests {
         let hub = State::of(&[4; 32], songs.clone());
         let whole = library::sync::seal(&[4; 32], &library::sync::pack(&serde_json::to_vec(&hub.fields).unwrap())).unwrap();
         assert!(whole.len() > library::sync::MAX_DATA, "too big for one blob");
-        let library_job = |state: &State, adopt| Job { blob: Blob::Library, ..job(&base, &key, &me, state, adopt) };
+        let library_job = |state: &State, adopt| Job { blob: Blob::Library, adopt, ..job(&base, &key, &me, state) };
         let up = sync(library_job(&hub, true)).unwrap();
         let shards = up.revisions.len();
         assert!(shards > 1 && shards.is_power_of_two(), "split as it needed: {shards}");
@@ -1659,7 +1670,7 @@ mod tests {
     /// sync what they changed. Its state after.
     fn round(base: &str, key: &str, me: &Identity, state: State, device: &str, store: &mut crate::song_store::SongStore, wanted: &BTreeSet<String>) -> State {
         let relay = Relay { server: base.into(), server_key: key.into(), identity: me.clone(), sync_key: [4; 32], dir: store.dir().to_path_buf(), device: "test".into(), hub: None };
-        let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
+        let synced = sync(Job { blob: Blob::Transfers, adopt: false, ..job(base, key, me, &state) }).unwrap();
         let mut state = after(state, &synced);
         let plan = song_sync::plan(&state.applied, device, |k| store.has(k), wanted, &BTreeSet::new(), &BTreeSet::new(), None);
         let mut leaves = plan.leaves;
@@ -1671,7 +1682,7 @@ mod tests {
             leaves = song_sync::after(leaves, &moved);
         }
         state.record_leaves(leaves, settings_sync::now());
-        let synced = sync(Job { blob: Blob::Transfers, ..job(base, key, me, &state, false) }).unwrap();
+        let synced = sync(Job { blob: Blob::Transfers, adopt: false, ..job(base, key, me, &state) }).unwrap();
         after(state, &synced)
     }
 

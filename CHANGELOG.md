@@ -7,7 +7,12 @@ What changed in each version of synththing, newest first. The app shows the new 
 ### Changed
 - The seek bar covers only the part of a song that plays: for a song with a start or stop time (Song info > Options), it runs from its start time to its stop time, and the times beside it count from its start time. To see the whole song with those times marked on it instead, pick Whole song, marked under Preferences > Appearance > Seek bar > Start and stop times.
 
+### Added
+- Wishlist: a broom button on the Got it heading takes every wish that came true off the wishlist at once (click it twice to confirm).
+- The script editor's problems menu has a Copy all button, which copies every problem the script has, one per line with its line number.
+
 ### Fixed
+- Seeking in a MIDI song is instant now, even far into a long one. It used to play the whole song silently up to the new spot first, which could freeze playback for a long while.
 - Android: the app no longer stops responding, and then shows only a grey screen, when Android closes its window in the background (swiping it away from recent apps, closing the mini player, or Android reclaiming it).
 
 ## 2.9.0 (2026-11-07)
