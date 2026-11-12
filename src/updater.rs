@@ -17,7 +17,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, LazyLock, Mutex};
 use std::thread;
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -519,6 +519,7 @@ fn download_and_replace(release: &Release, updater: &Updater) -> Result<()> {
     }
     #[cfg(not(target_os = "android"))]
     {
+        LazyLock::force(&EXE);
         let result = self_replace::self_replace(&path).context("replacing the running program");
         let _ = std::fs::remove_file(&path);
         result
@@ -605,10 +606,16 @@ pub fn install_now(release: &Release) -> Result<()> {
     download_and_replace(release, &Updater::new())
 }
 
+/// Where this program was started from, read before an update swaps the
+/// file: on Linux, asking afterwards gives "<path> (deleted)", which can't
+/// be started.
+static EXE: LazyLock<std::io::Result<PathBuf>> = LazyLock::new(std::env::current_exe);
+
 /// Start the (now updated) exe again with the same arguments. The caller
 /// then closes this instance.
 pub fn relaunch() -> Result<()> {
-    crate::instance::hand_over_to(&std::env::current_exe()?)
+    let exe = EXE.as_ref().map_err(|e| anyhow!("finding this program: {e}"))?;
+    crate::instance::hand_over_to(exe)
 }
 
 #[cfg(test)]
