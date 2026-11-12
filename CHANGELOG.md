@@ -2,6 +2,15 @@
 
 What changed in each version of synththing, newest first. The app shows the new parts after an update (and all of it under Help > Changelog...). Changes not released yet are in `changelog.d/`.
 
+## 2.11.0 (2026-11-12)
+
+### Changed
+- Moderation: what went wrong shows in red, and a hub that couldn't be made keeps what was typed for it and says what its owner has to do first.
+
+### Fixed
+- A hosted hub's first check of whether it can be reached no longer fails right after it's signed in from the app.
+- A hub that can't be reached and sits beside the server is no longer told its address is old or shared.
+
 ## 2.10.3 (2026-11-12)
 
 ### Added
