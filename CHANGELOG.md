@@ -2,6 +2,13 @@
 
 What changed in each version of synththing, newest first. The app shows the new parts after an update (and all of it under Help > Changelog...). Changes not released yet are in `changelog.d/`.
 
+## 2.10.3 (2026-11-12)
+
+### Added
+- A hub set up for you on the server shows up by itself: a window says how much room it has, and Start using it signs it in as one of your devices. It waits in your notifications until you do.
+- Moderation > Hubs: a new hub is made for someone by their ID, and they're told about it in their app.
+- Moderation: a Hubs tab for the server's admins shows the hubs the server hosts, what each uses of its room and what their storage costs a month, and makes, resizes and deletes them.
+
 ## 2.10.2 (2026-11-11)
 
 ### Changed
