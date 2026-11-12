@@ -47,7 +47,7 @@ impl App {
     /// The flow's Install page: it's done (and the app restarts) when the
     /// flow is.
     pub(super) fn install_step_ui(&mut self, ui: &mut egui::Ui) {
-        let here = std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default();
+        let here = crate::exe::display();
         let to = install::dir().map(|p| p.display().to_string()).unwrap_or_default();
         settings_group("Install").icon("download-simple").hint("Preferences > App installs it any time.").show(ui, |ui| {
             setting_row(ui, |ui| {
@@ -91,7 +91,7 @@ impl App {
                 if self.install.delete_old
                     && let Err(e) = self_replace::self_delete()
                 {
-                    log::warn!("couldn't delete {}: {e}", std::env::current_exe().unwrap_or_default().display());
+                    log::warn!("couldn't delete {}: {e}", crate::exe::display());
                 }
                 self.quit(ctx);
                 true

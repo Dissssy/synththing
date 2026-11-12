@@ -608,7 +608,7 @@ pub fn install_now(release: &Release) -> Result<()> {
 /// Start the (now updated) exe again with the same arguments. The caller
 /// then closes this instance.
 pub fn relaunch() -> Result<()> {
-    crate::instance::hand_over_to(&std::env::current_exe()?)
+    crate::instance::hand_over_to(crate::exe::path()?)
 }
 
 #[cfg(test)]

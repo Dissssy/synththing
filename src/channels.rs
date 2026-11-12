@@ -231,7 +231,7 @@ fn install(release: &Release, progress: impl FnMut(u64)) -> Result<()> {
     let placed = fs::rename(&download, &exe).or_else(|_| fs::copy(&download, &exe).map(|_| ()));
     let _ = fs::remove_file(&download);
     placed.with_context(|| format!("replacing {} (is that build running?)", exe.display()))?;
-    if let Ok(me) = std::env::current_exe() {
+    if let Ok(me) = crate::exe::path() {
         let _ = fs::write(dir.join("installed-by"), me.to_string_lossy().as_bytes());
     }
     let config = dir.join("config");
