@@ -38,7 +38,10 @@ pub(super) fn act(state: &State, action: &HubAction) -> Acted {
     match action {
         HubAction::Add { name, size_gb, owner, note } => {
             // (Before anything's made: a hub nobody can be told about is no use.)
-            let owner = moderation::resolve_key(&state.db(), owner)?;
+            let owner = moderation::resolve_key(&state.db(), owner).map_err(|(status, _)| {
+                let hint = "they have to turn on sync (or attach an email) in their app first, or give their whole key";
+                (status, format!("this server hasn't heard from #{} yet: {hint}", owner.trim().trim_start_matches('#')))
+            })?;
             let made = add(base, &state.key, name, *size_gb, &key_id(&owner), note)?;
             let (Some(url), Some(code)) = (made["url"].as_str(), made["claim"].as_str()) else {
                 return Err((502, "the hub host made the hub, but didn't say where it is or how it's claimed".into()));

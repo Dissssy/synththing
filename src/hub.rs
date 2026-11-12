@@ -18,7 +18,7 @@
 //! fix if they don't (`hub check` does it now). While it's the hub, it
 //! does the library's background work (`background.rs`), for every device.
 
-use std::io::{IsTerminal, Read};
+use std::io::{IsTerminal, Read, Write};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -365,11 +365,9 @@ fn claims() -> Option<(tiny_http::Server, String)> {
 fn claimed(mut request: tiny_http::Request, code: &str, name: Option<&str>) {
     let answer = |status: u16, error: &str| {
         let body = if error.is_empty() { serde_json::json!({}) } else { serde_json::json!({ "error": error }) };
-        tiny_http::Response::from_string(body.to_string())
-            .with_status_code(status)
-            .with_header("Content-Type: application/json".parse::<tiny_http::Header>().expect("a header"))
+        (status, body.to_string())
     };
-    let response = if *request.method() != tiny_http::Method::Post || request.url() != "/hub/v1/claim" {
+    let (status, body) = if *request.method() != tiny_http::Method::Post || request.url() != "/hub/v1/claim" {
         answer(404, "this hub isn't signed in yet")
     } else {
         let mut body = String::new();
@@ -391,7 +389,18 @@ fn claimed(mut request: tiny_http::Request, code: &str, name: Option<&str>) {
             },
         }
     };
-    let _ = request.respond(response);
+    // Written by hand to close the connection: a proxy in front keeps the
+    // ones it's allowed to for its next request, and this listener is gone
+    // by then (the songs' server takes its place), so that request would
+    // go nowhere.
+    let mut writer = request.into_writer();
+    let _ = write!(
+        writer,
+        "HTTP/1.1 {status} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        if status == 200 { "OK" } else { "Refused" },
+        body.len()
+    );
+    let _ = writer.flush();
 }
 
 /// The port it serves on.
@@ -585,7 +594,7 @@ mod tests {
         let listener = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let hub = format!("http://{}", listener.server_addr().to_ip().unwrap());
         let answering = std::thread::spawn(move || {
-            for _ in 0..2 {
+            for _ in 0..3 {
                 claimed(listener.recv().unwrap(), "right", None);
             }
         });
@@ -594,6 +603,14 @@ mod tests {
         // (The right code gets as far as the link, which this one isn't.)
         let no_link = client::hub_claim(&hub, "right", "not a link").unwrap_err();
         assert!(no_link.contains("sign-in link"), "{no_link}");
+        // Each answer closes its connection, so a proxy doesn't keep one to
+        // a listener that's about to go.
+        let mut raw = std::net::TcpStream::connect(hub.trim_start_matches("http://")).unwrap();
+        raw.write_all(b"GET / HTTP/1.1\r\nHost: hub\r\n\r\n").unwrap();
+        let mut answer = [0u8; 256];
+        let read = raw.read(&mut answer).unwrap();
+        let answer = String::from_utf8_lossy(&answer[..read]);
+        assert!(answer.contains("Connection: close"), "{answer}");
         answering.join().unwrap();
     }
 }

@@ -128,6 +128,10 @@ struct Window {
     ban: BanForm,
     new_admin: String,
     message: Option<String>,
+    /// The message says something went wrong.
+    failed: bool,
+    /// The hub in `new_hub` is being made: the form's emptied once it is.
+    making_hub: bool,
 }
 
 pub struct ModerationState {
@@ -312,6 +316,8 @@ impl App {
             ban: BanForm::default(),
             new_admin: String::new(),
             message: None,
+            failed: false,
+            making_hub: false,
         });
         self.refresh_moderation();
     }
@@ -468,13 +474,22 @@ impl App {
                                 w.ban.target = target;
                                 w.tab = Tab::Bans;
                                 w.message = Some("Fill in why, then Ban.".into());
+                                w.failed = false;
                             }
-                            Err(e) => w.message = Some(format!("Couldn't look up its author: {e}")),
+                            Err(e) => {
+                                w.message = Some(format!("Couldn't look up its author: {e}"));
+                                w.failed = true;
+                            }
                         }
                     }
                 }
                 Event::Done(what, result) => {
                     if let Some(w) = window {
+                        w.failed = result.is_err();
+                        // (What was typed for a hub that wasn't made stays, to fix and try again.)
+                        if std::mem::take(&mut w.making_hub) && result.is_ok() {
+                            w.new_hub = HubForm::default();
+                        }
                         w.message = Some(match result {
                             Ok(()) => what,
                             Err(e) => format!("Didn't work: {e}"),
@@ -682,7 +697,11 @@ impl App {
                 }
             });
             if let Some(message) = &window.message {
-                ui.weak(message);
+                if window.failed {
+                    ui.colored_label(ui.visuals().error_fg_color, message);
+                } else {
+                    ui.weak(message);
+                }
             }
             ui.separator();
             egui::ScrollArea::vertical().id_salt("moderation_body").max_height(520.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -1311,13 +1330,13 @@ fn hubs_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String
         ui.add(egui::TextEdit::singleline(&mut form.note).desired_width(360.0));
         ui.end_row();
     });
-    let ready = !form.name.trim().is_empty() && !form.owner.trim().is_empty();
+    let ready = !form.name.trim().is_empty() && !form.owner.trim().is_empty() && !window.making_hub;
     if ui
         .add_enabled(ready, egui::Button::new("Make hub"))
         .on_hover_text("Sets its room aside (growing the volume if it takes that) and starts it. This takes a little while")
         .clicked()
     {
-        let form = std::mem::take(form);
+        window.making_hub = true;
         actions.push((
             String::new(),
             vec![AdminAction::Hub(HubAction::Add {
@@ -1329,6 +1348,7 @@ fn hubs_tab_ui(ui: &mut egui::Ui, window: &mut Window, actions: &mut Vec<(String
         ));
     }
     if actions.len() > before {
+        window.failed = false;
         window.message = Some("Asked the hub host: this can take a little while.".into());
     }
 }
