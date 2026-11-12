@@ -2122,7 +2122,7 @@ mod tests {
         let add = |name: &str, owner: String| hub(HubAction::Add { name: name.into(), size_gb: 50, owner, note: String::new() });
 
         // Nobody to tell: nothing's made.
-        assert!(add("ghost", "#nobody00".into()).unwrap_err().contains("no key"));
+        assert!(add("ghost", "#nobody00".into()).unwrap_err().contains("hasn't heard from #nobody00"));
         assert!(alice_has(&base, &key, &alice).is_empty());
 
         add("alice", alice.public()).unwrap();
