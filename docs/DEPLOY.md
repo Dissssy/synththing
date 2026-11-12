@@ -107,6 +107,14 @@ A server can hand its feedback out to be filed as GitHub issues by an hourly Cla
 
 Notes stay waiting until a run says it has taken them, so nothing is lost if a run fails. To have a note filed again, clear its `taken` (`sqlite3 library.db "UPDATE feedback SET taken = NULL WHERE id = 12"`). To change the token, delete `intake.token` and restart.
 
+## Hosted hubs
+
+A server whose machine also runs a hub host can let its admins manage the hubs it hosts from the app (docs/SERVER.md, Hosted hubs). The hub host takes requests signed by the server's key only, so give it the server's public key (the `key` in `/api/v1/info`), and keep its port closed to the internet.
+
+1. In `server.json`: `"hubhost": "http://host.docker.internal:7444"` (the hub host's address as the server reaches it; `http://127.0.0.1:7444` for a server outside Docker).
+2. In Docker, the server's container reaches the machine through `extra_hosts: ["host.docker.internal:host-gateway"]`, and the machine's firewall has to let Docker's networks in on that port (`ufw allow from 172.16.0.0/12 to any port 7444 proto tcp`).
+3. Restart. Moderation > Hubs in an admin's app lists the hubs; without the setting it says the server doesn't host any.
+
 ## Moderating
 
 `synththing admin` on the server talks to it, signed with its own key (docs/cli.md): `synththing admin --data /var/lib/synththing reports` under systemd (as root, or the synththing user), `docker exec <container> synththing admin --data /data reports` in Docker. To moderate from the app instead, make your identity an admin: `synththing admin --data ... add-admin '#yourid'` (the server needs to have seen your key: give something an encore first, or pass the whole key). The Library tab then has Moderation.
