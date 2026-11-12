@@ -224,8 +224,8 @@ pub fn run() -> i32 {
                 } else {
                     log::info!("the hub has room for songs again");
                 }
-                sync.hub_full(full);
             }
+            sync.hub_room(crate::storage::Disk::of(songs.dir()), full);
         }
         match sync.hub() {
             Some(hub) if hub.device == device.id => named = true,
@@ -371,7 +371,7 @@ fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &De
     } else {
         log::info!("serving songs on port {port}, for your devices at {}", addrs.join(", "));
     }
-    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs, checks: Vec::new(), full: false };
+    let leaf = HubLeaf { device: device.id.clone(), key: hub_key, addrs, checks: Vec::new(), full: false, disk: None };
     Ok((server, came, leaf))
 }
 
