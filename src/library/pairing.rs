@@ -48,6 +48,16 @@ pub struct PairStatus {
     pub taken: Option<String>,
 }
 
+/// `POST /hub/v1/claim` on a hosted hub that isn't signed in yet: its
+/// owner's app signs it in with a link, proving it's the owner with the
+/// code the hub was made with (which the server told only them). The link
+/// goes straight to the hub: it opens the identity, so no server sees it.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Claim {
+    pub code: String,
+    pub link: String,
+}
+
 /// A link to a parked handoff: `<server>/pair#<id>.<secret>`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Link {

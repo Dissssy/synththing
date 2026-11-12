@@ -86,6 +86,7 @@ fn template(kind: &str) -> &'static str {
         "new_dispute" => "A copyright notice on \"{name}\" was disputed",
         "hub_unreachable" => "Your hub at {url} hasn't been reachable from the internet for a while: {hint}",
         "hub_reachable" => "Your hub at {url} is reachable from the internet again",
+        "hub_granted" => "You have a {size_gb} GB hub for your songs: update the app to start using it",
         _ => "{kind}",
     }
 }

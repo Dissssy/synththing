@@ -6,14 +6,20 @@
 //! `HubAction` is passed on to it at `server.json`'s `hubhost`, signed
 //! with the server's own key over [`message`], with a time and a nonce so
 //! a request can't be sent twice.
+//!
+//! A hub is made for someone: its owner (an identity) gets a `hub_granted`
+//! notification with the hub's address and the claim code it was made
+//! with, and their app signs the hub in with those, talking to the hub
+//! itself. A sign-in link opens the identity's keys, so none ever comes
+//! through here.
 
 use std::time::Duration;
 
 use ed25519_dalek::SigningKey;
 use serde_json::{json, Value};
 
-use super::{now, State};
-use crate::library::{hex, sha256_hex, sign_hex, HubAction};
+use super::{moderation, notifications, now, State};
+use crate::library::{hex, key_id, sha256_hex, sign_hex, HubAction};
 
 const TIME_HEADER: &str = "x-hubhost-time";
 const NONCE_HEADER: &str = "x-hubhost-nonce";
@@ -28,7 +34,37 @@ fn message(method: &str, path: &str, time: i64, nonce: &str, body: &[u8]) -> Vec
 
 pub(super) fn act(state: &State, action: &HubAction) -> Acted {
     let base = state.config.hubhost.as_deref().ok_or((404, "this server doesn't host hubs".to_string()))?;
-    act_at(base.trim_end_matches('/'), &state.key, action)
+    let base = base.trim_end_matches('/');
+    match action {
+        HubAction::Add { name, size_gb, owner, note } => {
+            // (Before anything's made: a hub nobody can be told about is no use.)
+            let owner = moderation::resolve_key(&state.db(), owner)?;
+            let made = add(base, &state.key, name, *size_gb, &key_id(&owner), note)?;
+            let (Some(url), Some(code)) = (made["url"].as_str(), made["claim"].as_str()) else {
+                return Err((502, "the hub host made the hub, but didn't say where it is or how it's claimed".into()));
+            };
+            let granted = json!({ "name": name, "url": url, "code": code, "size_gb": size_gb });
+            notifications::notify(state, &state.db(), &owner, "hub_granted", granted, true);
+            Ok(json!({ "done": format!("Made {url}: #{} is being told.", key_id(&owner)) }))
+        }
+        HubAction::Destroy { name } => {
+            let done = act_at(base, &state.key, action)?;
+            // (Nobody's asked to sign in a hub that's gone.)
+            let _ = state.db().execute(
+                "UPDATE notifications SET handled = 1, read = 1, resolution = 'withdrawn'
+                 WHERE kind = 'hub_granted' AND handled = 0 AND json_extract(data, '$.name') = ?",
+                [name],
+            );
+            Ok(done)
+        }
+        HubAction::List | HubAction::Resize { .. } => act_at(base, &state.key, action),
+    }
+}
+
+/// Have the hub host make a hub: what it says of it (`url`, `claim`).
+fn add(base: &str, key: &SigningKey, name: &str, size_gb: u64, owner: &str, note: &str) -> Acted {
+    let body = json!({ "name": named(name)?, "size_gb": size_gb, "owner": owner, "note": filled(note) });
+    send(base, key, "POST", "/v1/hubs", Some(body))
 }
 
 fn act_at(base: &str, key: &SigningKey, action: &HubAction) -> Acted {
@@ -42,11 +78,7 @@ fn act_at(base: &str, key: &SigningKey, action: &HubAction) -> Acted {
             }
             Ok(hubs)
         }
-        HubAction::Add { name, size_gb, owner, note } => {
-            let body = json!({ "name": named(name)?, "size_gb": size_gb, "owner": filled(owner), "note": filled(note) });
-            let made = send(base, key, "POST", "/v1/hubs", Some(body))?;
-            Ok(json!({ "done": format!("Made {}.", made["url"].as_str().unwrap_or(name)) }))
-        }
+        HubAction::Add { name, size_gb, owner, note } => add(base, key, name, *size_gb, owner, note),
         HubAction::Resize { name, size_gb } => {
             send(base, key, "PATCH", &hub(name)?, Some(json!({ "size_gb": size_gb })))?;
             Ok(json!({ "done": format!("{name} has {size_gb} GB now.") }))
@@ -154,7 +186,7 @@ mod tests {
             ],
         );
         let add = HubAction::Add { name: "sophie".into(), size_gb: 50, owner: "axk3xbkl".into(), note: " ".into() };
-        assert_eq!(act_at(&base, &key, &add).unwrap()["done"], "Made https://sophie.hubs.example.");
+        assert_eq!(act_at(&base, &key, &add).unwrap()["url"], "https://sophie.hubs.example");
         act_at(&base, &key, &HubAction::Resize { name: "sophie".into(), size_gb: 100 }).unwrap();
         act_at(&base, &key, &HubAction::Destroy { name: "sophie".into() }).unwrap();
         let listed: crate::library::HostedHubs = serde_json::from_value(act_at(&base, &key, &HubAction::List).unwrap()).unwrap();
@@ -180,7 +212,7 @@ mod tests {
     fn refusals_come_back_in_the_hub_hosts_words() {
         let key = SigningKey::from_bytes(&[7; 32]);
         let (base, host) = host(&key, vec![(422, json!({ "error": "there's a hub called sophie already" }))]);
-        let add = HubAction::Add { name: "sophie".into(), size_gb: 50, owner: String::new(), note: String::new() };
+        let add = HubAction::Add { name: "sophie".into(), size_gb: 50, owner: "axk3xbkl".into(), note: String::new() };
         assert_eq!(act_at(&base, &key, &add), Err((400, "the hub host says: there's a hub called sophie already".into())));
         host.join().unwrap();
         // A name that would change the address asked for never leaves.

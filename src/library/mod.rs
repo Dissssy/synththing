@@ -769,7 +769,8 @@ pub enum AdminAction {
 pub enum HubAction {
     /// Every hub, the pool they share and what it costs: `HostedHubs`.
     List,
-    /// Make a hub of `size_gb` for `owner` (an identity's ID).
+    /// Make a hub of `size_gb` for `owner` (an identity's ID or key), who's
+    /// told (a `hub_granted` notification) and signs it in from their app.
     Add { name: String, size_gb: u64, owner: String, note: String },
     Resize { name: String, size_gb: u64 },
     /// Delete a hub and every song on it.

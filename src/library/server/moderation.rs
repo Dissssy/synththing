@@ -593,8 +593,9 @@ fn reports(db: &Connection, script: Option<&str>, all: bool) -> rusqlite::Result
 }
 
 /// A key, as its hex or an ID (`#abc...` or not) of one this server has
-/// seen (uploading, giving encores, reporting, as an admin).
-fn resolve_key(db: &Connection, text: &str) -> Result<String, (u16, String)> {
+/// seen (uploading, giving encores, reporting, as an admin, syncing, with
+/// an email attached).
+pub(super) fn resolve_key(db: &Connection, text: &str) -> Result<String, (u16, String)> {
     let text = text.trim().trim_start_matches('#').to_lowercase();
     if text.len() == 64 && text.chars().all(|c| c.is_ascii_hexdigit()) {
         return Ok(text);
@@ -602,7 +603,8 @@ fn resolve_key(db: &Connection, text: &str) -> Result<String, (u16, String)> {
     let keys: Vec<String> = db
         .prepare(
             "SELECT author_key FROM scripts WHERE author_key IS NOT NULL UNION SELECT key FROM encores
-             UNION SELECT reporter_key FROM reports UNION SELECT key FROM admins UNION SELECT target FROM bans",
+             UNION SELECT reporter_key FROM reports UNION SELECT key FROM admins UNION SELECT target FROM bans
+             UNION SELECT key FROM sync UNION SELECT key FROM identities",
         )
         .and_then(|mut s| s.query_map([], |r| r.get(0))?.collect())
         .map_err(db_error)?;

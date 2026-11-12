@@ -14,6 +14,8 @@ synththing hub pair '<link>' --name "Home hub"
 
 Quote the link: it has a `#` in it. `--name` is what your other devices show for it (by default the computer's name). The link works once, for 10 minutes.
 
+A hub a server hosts for you (docs/SERVER.md, Hosted hubs) needs none of this: the app says when one's been set up for you, and Start using it signs it in. Such a hub is started with a code in `SYNTHTHING_CLAIM_CODE`, and until it's signed in it listens on its port for that code and a sign-in link from its owner's app (`POST /hub/v1/claim`).
+
 Or give `synththing hub` the link in the `SYNTHTHING_PAIR_LINK` environment variable (and the name in `SYNTHTHING_HUB_NAME`): it signs in with it when it starts, if it isn't signed in already. A hub that isn't signed in waits for one of these, so `hub pair` works while it runs. Run in a terminal, it also asks for the link: paste it in.
 
 ## Running it
