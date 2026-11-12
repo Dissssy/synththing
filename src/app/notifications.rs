@@ -83,6 +83,7 @@ fn wording(kind: &str) -> Option<&'static str> {
         "new_dispute" => "A copyright notice on \"{name}\" was disputed",
         "hub_unreachable" => "Your hub at {url} hasn't been reachable from the internet for a while: {hint}",
         "hub_reachable" => "Your hub at {url} is reachable from the internet again",
+        "hub_granted" => "You have a hub with room for {size_gb} GB of your songs",
         _ => return None,
     })
 }
@@ -105,6 +106,7 @@ fn icon_of(kind: &str) -> &'static str {
         "dispute_upheld" | "notice_withdrawn" => "check-circle",
         "hub_unreachable" => "wifi-x",
         "hub_reachable" => "wifi-high",
+        "hub_granted" => "hard-drives",
         _ => "bell",
     })
 }
@@ -114,7 +116,7 @@ fn icon_of(kind: &str) -> &'static str {
 /// kind this app doesn't know.
 fn tier_of(kind: &str) -> u8 {
     match kind {
-        "encore_milestone" | "download_milestone" | "remixed" | "feedback_fixed" | "feedback_added" => 1,
+        "encore_milestone" | "download_milestone" | "remixed" | "feedback_fixed" | "feedback_added" | "hub_granted" => 1,
         "reinstated" | "dispute_upheld" | "notice_withdrawn" | "report_handled" | "notice_rejected" | "hub_reachable"
         | "feedback_not_planned" => 2,
         "new_report" | "new_feedback" | "new_notice" | "new_dispute" | "notice_disputed" | "hidden" => 3,
@@ -183,6 +185,8 @@ fn resolution_text(resolution: &str) -> String {
         "found bogus" => "The moderators found the notice bogus: it's back up.".into(),
         "not disputed in 14 days" => "It wasn't disputed in 14 days, so it stands.".into(),
         "the dispute was rejected" => "The moderators rejected the dispute: it stands.".into(),
+        "claimed" => "You set it up: it's one of your devices now.".into(),
+        "withdrawn" => "The hub was taken down again.".into(),
         other => format!("Done: {other}."),
     }
 }
@@ -244,11 +248,12 @@ impl App {
                 // (Listened to again: synced data may have changed meanwhile.)
                 Event::List(list) => {
                     self.sync_server_seen(None);
-                    self.notifications.items = if wanted { list } else { Vec::new() };
+                    // (A hub waiting to be set up shows whether or not notifications do.)
+                    self.notifications.items = list.into_iter().filter(|n| wanted || n.kind == super::hub_grant::KIND).collect();
                 }
                 Event::New(notification) => {
                     let items = &mut self.notifications.items;
-                    if wanted && !items.iter().any(|n| n.id == notification.id) {
+                    if (wanted || notification.kind == super::hub_grant::KIND) && !items.iter().any(|n| n.id == notification.id) {
                         items.push(notification);
                     }
                 }
@@ -277,6 +282,31 @@ impl App {
                 n.resolution = Some(resolution.to_string());
             }
         }
+    }
+
+    pub(super) fn notification(&self, id: i64) -> Option<&Notification> {
+        self.notifications.items.iter().find(|n| n.id == id)
+    }
+
+    /// The notifications of `kind` still asking for something.
+    pub(super) fn notifications_waiting<'a>(&'a self, kind: &'a str) -> impl Iterator<Item = &'a Notification> {
+        self.notifications.items.iter().filter(move |n| n.kind == kind && n.needs_action && !n.handled)
+    }
+
+    /// What a notification asked for was done here: `resolution` says how.
+    pub(super) fn notification_handled(&mut self, id: i64, resolution: &str) {
+        let Some(identity) = self.library_identity() else { return };
+        if let Some(n) = self.notifications.items.iter_mut().find(|n| n.id == id) {
+            n.handled = true;
+            n.read = true;
+            n.resolution = Some(resolution.to_string());
+        }
+        let (server, key, resolution) = (library::official_url(), library::server_key(), resolution.to_string());
+        std::thread::spawn(move || {
+            if let Err(e) = client::resolve_notification(&server, &key, &identity, id, &resolution) {
+                log::warn!("couldn't mark a notification handled: {e}");
+            }
+        });
     }
 
     /// Mark these read (or handled) on the server, and here.
@@ -418,6 +448,7 @@ impl App {
         let mut moderate_feedback = false;
         let mut copyright = false;
         let mut notice: Option<(i64, bool)> = None;
+        let mut hub = false;
         let response = egui::Modal::new(egui::Id::unique("notification")).show(ctx, |ui| {
             ui.set_width(super::fit_width(ui, 440.0));
             ui.horizontal(|ui| {
@@ -453,6 +484,11 @@ impl App {
                         }
                     }
                     "copyright_notice" => {}
+                    super::hub_grant::KIND => {
+                        if !n.handled && ui.button("Set it up...").clicked() {
+                            hub = true;
+                        }
+                    }
                     "new_notice" | "new_dispute" => {
                         if ui.button("Open Moderation").clicked() {
                             copyright = true;
@@ -506,6 +542,9 @@ impl App {
         } else if copyright {
             self.notifications.detail = None;
             self.open_moderation_copyright();
+        } else if hub {
+            self.notifications.detail = None;
+            self.open_hub_grant(n.id);
         } else if let Some((id, dispute)) = notice {
             self.notifications.detail = None;
             self.open_notice(id, dispute);
@@ -589,6 +628,7 @@ mod tests {
             "takedown_stood",
             "new_notice",
             "new_dispute",
+            "hub_granted",
         ];
         for kind in kinds {
             assert!(wording(kind).is_some(), "{kind} isn't worded");

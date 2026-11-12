@@ -47,6 +47,7 @@ mod library;
 mod lookup;
 mod background;
 mod groupings;
+mod hub_grant;
 mod recording;
 mod reorder;
 mod repair;
@@ -426,6 +427,7 @@ pub struct App {
     sync: sync::SyncState,
     /// Notifications from the server.
     notifications: notifications::NotificationsState,
+    hub_grant: hub_grant::HubGrantState,
     /// A copyright notice on one of the user's uploads, open.
     copyright: copyright::CopyrightState,
     /// What to go through before the rest of the app (`flow.rs`).
@@ -785,6 +787,7 @@ impl App {
             choose_art: None,
             sync: Default::default(),
             notifications: Default::default(),
+            hub_grant: Default::default(),
             copyright: Default::default(),
             flow: flow::Flow::default(),
             send_usage_data: false,
@@ -978,6 +981,7 @@ impl App {
             || self.feedback.open()
             || self.identity.open()
             || self.notifications.open()
+            || self.hub_grant.open()
             || self.copyright.open()
             || self.editor.history_open
             || self.layout_new.is_some()
@@ -1112,6 +1116,7 @@ impl App {
         frame_timing::time("poll_identity", || self.poll_identity());
         frame_timing::time("poll_pairing", || self.poll_pairing());
         frame_timing::time("poll_notifications", || self.poll_notifications(ctx));
+        self.poll_hub_grant();
         frame_timing::time("poll_hub_live", || self.poll_hub_live(ctx));
         // (The update download gets the connection.)
         let held = self.update_offered();
@@ -1323,6 +1328,7 @@ impl eframe::App for App {
         self.sync_toast_ui(&ctx);
         toast::ui(&ctx);
         self.notification_ui(&ctx);
+        self.hub_grant_ui(&ctx);
         self.panel_modal_ui(&ctx, &shared);
         self.copyright_ui(&ctx);
         self.moderation_ui(&ctx);

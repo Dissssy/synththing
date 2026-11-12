@@ -622,6 +622,13 @@ pub fn pair_status(base: &str, server_key: &str, identity: &Identity, id: &str) 
     signed_post(base, server_key, identity, &format!("/api/v1/pair/{id}"), &serde_json::json!({}))
 }
 
+/// Sign the hosted hub at `hub` in with `link`, as its owner (`code`).
+pub fn hub_claim(hub: &str, code: &str, link: &str) -> Result<(), String> {
+    let claim = super::pairing::Claim { code: code.to_string(), link: link.to_string() };
+    let request = agent().post(format!("{}/hub/v1/claim", hub.trim_end_matches('/'))).config().timeout_global(Some(Duration::from_secs(45))).build();
+    check(request.send_json(&claim)).map(|_| ())
+}
+
 /// Take a parked handoff (it's gone from the server after this), saying
 /// which device took it: the sealed handoff.
 pub fn pair_take(base: &str, id: &str, device: &str) -> Result<String, String> {
@@ -650,6 +657,13 @@ pub fn mark_notifications(
     handled: bool,
 ) -> Result<(), String> {
     let body = serde_json::json!({ "ids": ids, "all": all, "handled": handled });
+    signed_post::<serde_json::Value>(base, server_key, identity, "/api/v1/notifications/mark", &body).map(|_| ())
+}
+
+/// Mark a notification that asked for something handled, saying what was
+/// done (`resolution`).
+pub fn resolve_notification(base: &str, server_key: &str, identity: &Identity, id: i64, resolution: &str) -> Result<(), String> {
+    let body = serde_json::json!({ "ids": [id], "handled": true, "resolution": resolution });
     signed_post::<serde_json::Value>(base, server_key, identity, "/api/v1/notifications/mark", &body).map(|_| ())
 }
 
@@ -2074,6 +2088,71 @@ mod tests {
     fn urls() {
         assert_eq!(normalize_url(" synththing.p51.nl/ "), "https://synththing.p51.nl");
         assert_eq!(normalize_url("http://localhost:7381"), "http://localhost:7381");
+    }
+
+    /// A hub made for someone: they're told where it is and the code it's
+    /// claimed with, say when they've set it up, and stop being asked if
+    /// it's deleted first.
+    #[test]
+    fn hub_grants() {
+        use crate::library::HubAction;
+        // A hub host that makes whatever it's asked for.
+        let host = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let host_at = format!("http://{}", host.server_addr().to_ip().unwrap());
+        std::thread::spawn(move || {
+            for mut request in host.incoming_requests() {
+                let mut body = String::new();
+                request.as_reader().read_to_string(&mut body).unwrap();
+                let asked: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
+                let name = asked["name"].as_str().unwrap_or_default();
+                let reply = serde_json::json!({ "name": name, "url": format!("https://{name}.hubs.example"), "claim": format!("code-{name}") });
+                request.respond(tiny_http::Response::from_string(reply.to_string())).unwrap();
+            }
+        });
+        let dir = std::env::temp_dir().join(format!("synththing-hub-grant-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("server.json"), serde_json::json!({ "previews": false, "hubhost": host_at }).to_string()).unwrap();
+        let running = server::start(&dir, Some("127.0.0.1:0".into())).unwrap();
+        let base = format!("http://{}", running.addr);
+        let key = info(&base).unwrap().key;
+        let server_id = Identity::from_secret_hex(&std::fs::read_to_string(dir.join("server.key")).unwrap()).unwrap();
+        let alice = Identity::generate().unwrap();
+        let hub = |action: HubAction| admin::<serde_json::Value>(&base, &key, &server_id, &AdminAction::Hub(action));
+        let add = |name: &str, owner: String| hub(HubAction::Add { name: name.into(), size_gb: 50, owner, note: String::new() });
+
+        // Nobody to tell: nothing's made.
+        assert!(add("ghost", "#nobody00".into()).unwrap_err().contains("no key"));
+        assert!(alice_has(&base, &key, &alice).is_empty());
+
+        add("alice", alice.public()).unwrap();
+        let granted = alice_has(&base, &key, &alice);
+        assert_eq!(granted.len(), 1);
+        assert!(granted[0].needs_action && !granted[0].handled);
+        assert_eq!(granted[0].data["url"], "https://alice.hubs.example");
+        assert_eq!(granted[0].data["code"], "code-alice");
+        assert_eq!(granted[0].data["size_gb"], 50);
+        resolve_notification(&base, &key, &alice, granted[0].id, "claimed").unwrap();
+        let granted = alice_has(&base, &key, &alice);
+        assert!(granted[0].handled);
+        assert_eq!(granted[0].resolution.as_deref(), Some("claimed"));
+
+        // One deleted before it was set up: not asked for any more, and the
+        // one set up stays as it was.
+        add("spare", alice.public()).unwrap();
+        hub(HubAction::Destroy { name: "spare".into() }).unwrap();
+        let granted = alice_has(&base, &key, &alice);
+        let resolution = |name: &str| granted.iter().find(|n| n.data["name"] == name).unwrap().resolution.clone();
+        assert_eq!(resolution("spare").as_deref(), Some("withdrawn"));
+        assert_eq!(resolution("alice").as_deref(), Some("claimed"));
+
+        running.stop();
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The `hub_granted` notifications `identity` has.
+    fn alice_has(base: &str, key: &str, identity: &Identity) -> Vec<crate::library::Notification> {
+        notifications(base, key, identity, None).unwrap().into_iter().filter(|n| n.kind == "hub_granted").collect()
     }
 
     /// Signing in another device: a handoff parked, taken once, and its

@@ -18,7 +18,7 @@
 //! fix if they don't (`hub check` does it now). While it's the hub, it
 //! does the library's background work (`background.rs`), for every device.
 
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Read};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -47,6 +47,9 @@ const PAIR_LINK_VAR: &str = "SYNTHTHING_PAIR_LINK";
 const NAME_VAR: &str = "SYNTHTHING_HUB_NAME";
 /// How often it looks for a sign-in while it waits for one.
 const SIGN_IN_CHECK: Duration = Duration::from_secs(5);
+/// The code a hosted hub's owner signs it in with, from their app
+/// (`pairing::Claim`), while it isn't signed in.
+const CLAIM_VAR: &str = "SYNTHTHING_CLAIM_CODE";
 /// The port it serves songs on, and the addresses devices reach it at
 /// (comma-separated, nearest first) besides its own on its network.
 const PORT_VAR: &str = "SYNTHTHING_HUB_PORT";
@@ -301,10 +304,21 @@ fn signed_in() -> Identity {
         log::error!("signing in with {PAIR_LINK_VAR}: {e}");
     }
     let pasted = std::io::stdin().is_terminal().then(read_links);
+    let claims = claims();
     let mut told = false;
     loop {
         if let Some(identity) = Identity::load() {
             return identity;
+        }
+        if let Some((listener, code)) = &claims {
+            if !told {
+                told = true;
+                log::warn!("not signed in: waiting for its owner's app to sign it in ({CLAIM_VAR}), or for synththing hub pair '<link>'.");
+            }
+            if let Ok(Some(request)) = listener.recv_timeout(SIGN_IN_CHECK) {
+                claimed(request, code, name.as_deref());
+            }
+            continue;
         }
         if !told {
             told = true;
@@ -331,6 +345,63 @@ fn signed_in() -> Identity {
     }
 }
 
+/// Where a hosted hub hears its owner's app sign it in: its port, and the
+/// code the app has to send (`CLAIM_VAR`). Gone (so the port's free for
+/// the songs) once it's signed in.
+fn claims() -> Option<(tiny_http::Server, String)> {
+    let code = std::env::var(CLAIM_VAR).ok().map(|c| c.trim().to_string()).filter(|c| !c.is_empty())?;
+    let listener = port().and_then(|port| tiny_http::Server::http(("0.0.0.0", port)).map_err(|e| format!("couldn't listen on port {port}: {e}")));
+    match listener {
+        Ok(listener) => Some((listener, code)),
+        Err(e) => {
+            log::error!("can't be signed in from its owner's app: {e}");
+            None
+        }
+    }
+}
+
+/// Answer one request while waiting to be claimed: `POST /hub/v1/claim`
+/// with the right code signs the hub in with the link sent along.
+fn claimed(mut request: tiny_http::Request, code: &str, name: Option<&str>) {
+    let answer = |status: u16, error: &str| {
+        let body = if error.is_empty() { serde_json::json!({}) } else { serde_json::json!({ "error": error }) };
+        tiny_http::Response::from_string(body.to_string())
+            .with_status_code(status)
+            .with_header("Content-Type: application/json".parse::<tiny_http::Header>().expect("a header"))
+    };
+    let response = if *request.method() != tiny_http::Method::Post || request.url() != "/hub/v1/claim" {
+        answer(404, "this hub isn't signed in yet")
+    } else {
+        let mut body = String::new();
+        let read = request.as_reader().take(4096).read_to_string(&mut body);
+        match read.ok().and_then(|_| serde_json::from_str::<pairing::Claim>(&body).ok()) {
+            None => answer(400, "that isn't a claim"),
+            Some(claim) if claim.code != code => {
+                log::warn!("a claim with the wrong code, from {}", request.remote_addr().map(|a| a.to_string()).unwrap_or_default());
+                // (One at a time, each wrong one a second: no guessing it.)
+                std::thread::sleep(Duration::from_secs(1));
+                answer(403, "that isn't this hub's claim code")
+            }
+            Some(claim) => match pair(&claim.link, name) {
+                Ok(()) => answer(200, ""),
+                Err(e) => {
+                    log::error!("signing in with its owner's link: {e}");
+                    answer(400, &e)
+                }
+            },
+        }
+    };
+    let _ = request.respond(response);
+}
+
+/// The port it serves on.
+fn port() -> Result<u16, String> {
+    match std::env::var(PORT_VAR) {
+        Ok(port) => port.trim().parse().map_err(|_| format!("{PORT_VAR} isn't a port: {port}")),
+        Err(_) => Ok(PORT),
+    }
+}
+
 /// The lines typed or pasted into the terminal, from a thread of its own
 /// (until the receiver's dropped), leaving out blank ones.
 fn read_links() -> Receiver<String> {
@@ -353,10 +424,7 @@ fn read_links() -> Receiver<String> {
 /// the songs that come to it, and the hub's leaf, saying where it's
 /// reached.
 fn serve(identity: &Identity, sync_key: [u8; 32], songs: &SongStore, device: &Device) -> Result<(HubServer, Receiver<Came>, HubLeaf), String> {
-    let port = match std::env::var(PORT_VAR) {
-        Ok(port) => port.trim().parse().map_err(|_| format!("{PORT_VAR} isn't a port: {port}"))?,
-        Err(_) => PORT,
-    };
+    let port = port()?;
     let key = hub_server::hub_key()?;
     let hub_key = key.public();
     let (server, came) = HubServer::start(port, key, identity, sync_key, songs.dir().to_path_buf())?;
@@ -504,4 +572,28 @@ fn watch_server(link: &Link, identity: &Identity) -> Receiver<Heard> {
         })
         .ok();
     rx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A hub waiting to be claimed turns away the wrong code and anything
+    /// that isn't a claim, in words the app can show.
+    #[test]
+    fn claims_need_the_code() {
+        let listener = tiny_http::Server::http("127.0.0.1:0").unwrap();
+        let hub = format!("http://{}", listener.server_addr().to_ip().unwrap());
+        let answering = std::thread::spawn(move || {
+            for _ in 0..2 {
+                claimed(listener.recv().unwrap(), "right", None);
+            }
+        });
+        let wrong = client::hub_claim(&hub, "wrong", "https://example.org/pair#00.00").unwrap_err();
+        assert!(wrong.contains("claim code"), "{wrong}");
+        // (The right code gets as far as the link, which this one isn't.)
+        let no_link = client::hub_claim(&hub, "right", "not a link").unwrap_err();
+        assert!(no_link.contains("sign-in link"), "{no_link}");
+        answering.join().unwrap();
+    }
 }
