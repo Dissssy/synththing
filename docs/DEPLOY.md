@@ -168,8 +168,6 @@ Its services, with the stack's `ROOT` folder holding the data:
       - "127.0.0.1:7381:7381"
     volumes:
       - ${ROOT}/server:/data
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
     restart: unless-stopped
 
   website:
@@ -177,19 +175,10 @@ Its services, with the stack's `ROOT` folder holding the data:
     container_name: synththing-website
     ports:
       - "127.0.0.1:7382:80"
-    labels:
-      - com.centurylinklabs.watchtower.enable=true
-    restart: unless-stopped
-
-  # Pulls new images of the labelled containers every hour and recreates them.
-  watchtower:
-    image: nickfedor/watchtower
-    container_name: watchtower
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-    command: --label-enable --cleanup --interval 3600
     restart: unless-stopped
 ```
+
+Nothing in the stack updates them. Each release does: `release.yml`'s `deploy` job, on the runner on this machine, asks the hub host (`hubhost`, a service on the host, which also makes the hosted hubs) to pull the new images and remake these two containers and every hub, signed with a key of its own (the `HUBHOST_DEPLOY_KEY` secret; its public half is the hub host's `deploy_key`), at the `HUBHOST_URL` variable (`http://host.docker.internal:7444`, with `extra_hosts: ["host.docker.internal:host-gateway"]` on the runner). The job fails if the server isn't answering as the new version soon after. By hand: `hubhost update` on the machine.
 
 The website image (`deploy/website.Dockerfile`, pushed by `release.yml`'s `website` job) holds the front page, `deploy/website/index.html`, a plain-language tour of what the app does, and the docs at `/docs/`: this folder's Markdown, rendered by [mdBook](https://rust-lang.github.io/mdBook/) (`book.toml`, with `docs/SUMMARY.md` as the table of contents). Each release pushes a new one, so update the page in the repo when a release adds something worth telling people about. To see the docs locally: `mdbook serve --open`. A new page goes in `docs/SUMMARY.md` too.
 

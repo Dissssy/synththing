@@ -340,17 +340,54 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.description=synththing server and hub
 
+  # The official server's machine moves onto this release: its hub host
+  # (docs/DEPLOY.md, Hosted hubs) pulls the images just pushed and remakes
+  # the server, the website and every hub from them, then this waits for
+  # the server to answer as this version. The request is signed with the
+  # HUBHOST_DEPLOY_KEY secret (an Ed25519 key in PEM, whose public half
+  # the hub host has) and sent from our own runner, which is on that
+  # machine, to the HUBHOST_URL variable. Without them, this does nothing.
+  deploy:
+    needs: [docker, website]
+    if: always() && needs.docker.result == 'success' && needs.website.result == 'success'
+    runs-on: ${{ vars.RUNNER || 'ubuntu-latest' }}  # see ci.yml
+    env:
+      HUBHOST_DEPLOY_KEY: ${{ secrets.HUBHOST_DEPLOY_KEY }}
+      HUBHOST_URL: ${{ vars.HUBHOST_URL }}
+    steps:
+      - name: Update the containers
+        run: |
+          if [ -z "$HUBHOST_DEPLOY_KEY" ] || [ -z "$HUBHOST_URL" ]; then echo "No HUBHOST_DEPLOY_KEY secret or HUBHOST_URL variable: nothing to do."; exit 0; fi
+          key=$(mktemp)
+          printf '%s\n' "$HUBHOST_DEPLOY_KEY" > "$key"
+          time=$(date +%s)
+          nonce=$(openssl rand -hex 16)
+          empty=$(printf '' | sha256sum | cut -d' ' -f1)
+          printf 'hubhost\nPOST\n/v1/update\n%s\n%s\n%s' "$time" "$nonce" "$empty" > "$key.message"
+          signature=$(openssl pkeyutl -sign -inkey "$key" -rawin -in "$key.message" | od -An -tx1 | tr -d ' \n')
+          rm -f "$key" "$key.message"
+          curl -sS --fail-with-body --max-time 1800 -X POST "${HUBHOST_URL%/}/v1/update" \
+            -H "x-hubhost-time: $time" -H "x-hubhost-nonce: $nonce" -H "x-hubhost-signature: $signature"
+          echo
+          version="${GITHUB_REF_NAME#v}"
+          for i in $(seq 1 30); do
+            if curl -fsS https://synththing.p51.nl/api/v1/info | grep -q "\"version\":\"$version\""; then exit 0; fi
+            echo "the server isn't answering as $version yet..."
+            sleep 10
+          done
+          echo "the server still isn't running $version"
+          exit 1
+
   # The bundled scripts, published to the official script library with the
   # release's Linux build (it knows every function they use, so their
   # minimum app versions come out right). The server works those out too,
-  # with its own binary, so this waits until it's running this release
-  # (Watchtower pulls the new image within the hour). Without the
-  # SYNTHTHING_PUBLISH_KEY secret, this does nothing.
+  # with its own binary, so this comes after it's on this release (deploy,
+  # above). Without the SYNTHTHING_PUBLISH_KEY secret, this does nothing.
   scripts:
-    needs: publish
-    # Publish runs even when Android fails, and without this its own
+    needs: deploy
+    # Deploy runs even when Android fails, and without this its own
     # dependents would still be skipped for that failure.
-    if: always() && needs.publish.result == 'success'
+    if: always() && needs.deploy.result == 'success'
     runs-on: ubuntu-22.04
     env:
       SYNTHTHING_PUBLISH_KEY: ${{ secrets.SYNTHTHING_PUBLISH_KEY }}
@@ -368,11 +405,4 @@ jobs:
           chmod +x synththing-linux-x86_64
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libgtk-3-0 libasound2 libudev1 libxkbcommon0
-          version="${GITHUB_REF_NAME#v}"
-          for i in $(seq 1 40); do
-            running=$(curl -fsS https://synththing.p51.nl/api/v1/info | python3 -c 'import json,sys; print(json.load(sys.stdin)["version"])' || true)
-            if [ "$running" = "$version" ]; then break; fi
-            echo "the server runs ${running:-?}, waiting for $version..."
-            sleep 120
-          done
           ./synththing-linux-x86_64 publish-bundled --server https://synththing.p51.nl
