@@ -758,6 +758,69 @@ pub enum AdminAction {
     /// Frame times (`usage::PerfRow`s), the most frames first: all of
     /// them, or one version's.
     UsagePerf { version: Option<String> },
+    /// The hubs this server hosts (`server.json`'s `hubhost`).
+    Hub(HubAction),
+}
+
+/// What an admin does with the hubs the server hosts. The server signs it
+/// with its own key and passes it to its hub host (`server/hubhost.rs`).
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "hub", rename_all = "kebab-case")]
+pub enum HubAction {
+    /// Every hub, the pool they share and what it costs: `HostedHubs`.
+    List,
+    /// Make a hub of `size_gb` for `owner` (an identity's ID).
+    Add { name: String, size_gb: u64, owner: String, note: String },
+    Resize { name: String, size_gb: u64 },
+    /// Delete a hub and every song on it.
+    Destroy { name: String },
+}
+
+/// A hub the server hosts.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HostedHub {
+    pub name: String,
+    pub url: String,
+    /// The room it was given for songs (GB).
+    pub size_gb: u64,
+    /// What's in its folder; none if it couldn't be measured.
+    pub used_bytes: Option<u64>,
+    /// Its container's state (`running`, `exited`, ...), or `missing`.
+    pub state: String,
+    /// Where its grant came from: `manual` or `kofi`.
+    pub source: String,
+    pub owner: Option<String>,
+    pub note: Option<String>,
+}
+
+/// The volume every hosted hub is on.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HubPool {
+    /// The sum of the hubs' sizes.
+    pub granted_gb: u64,
+    pub size_bytes: u64,
+    pub used_bytes: u64,
+}
+
+/// What the pool costs a month, before tax.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HubCost {
+    pub net: f64,
+    pub currency: String,
+}
+
+/// `HubAction::List`'s answer.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HostedHubs {
+    pub hubs: Vec<HostedHub>,
+    pub pool: HubPool,
+    pub monthly_cost: Option<HubCost>,
+    /// Why there's no cost, if it couldn't be looked up.
+    pub monthly_cost_error: Option<String>,
 }
 
 /// A copyright notice, as a rights holder (or someone acting for one)

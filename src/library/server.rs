@@ -28,6 +28,7 @@ mod authority;
 mod copyright;
 mod deletion;
 mod feedback;
+mod hubhost;
 mod intake;
 mod mail;
 
@@ -137,6 +138,10 @@ pub struct ServerConfig {
     /// opens this server's sign-in links in the app. Only the official
     /// server's links are the app's, so only it needs them.
     pub android_fingerprints: Vec<String>,
+    /// Where this server's hub host listens (`hubhost serve`), e.g.
+    /// `http://host.docker.internal:7444`: admins manage the hubs it hosts
+    /// through this server, which signs each request with its own key.
+    pub hubhost: Option<String>,
 }
 
 impl Default for ServerConfig {
@@ -169,6 +174,7 @@ impl Default for ServerConfig {
             relay_mb_per_identity: 2048,
             intake: false,
             android_fingerprints: Vec::new(),
+            hubhost: None,
         }
     }
 }

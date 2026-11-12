@@ -129,12 +129,21 @@ Rendered by the server on each upload and each new version, through a queue (one
 ## Moderation
 
 - **Admins** are keys listed by the server (added with `synththing admin add-admin <id>`), and the server's own key.
-- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve, feedback, feedback-done, usage, usage-clear, usage-rules, rerender.
+- One endpoint, `POST /api/v1/admin`, signed by an admin, takes an action (`AdminAction`): reports, a script's extra metadata (uploader key and addresses, versions, its reports) and source (hidden or not), hide, unhide, delete, ban (a key or an address, for a while or for good, optionally hiding everything the key uploaded), unban, bans, add-admin, remove-admin, admins, resolve, feedback, feedback-done, usage, usage-clear, usage-rules, rerender, hub (Hosted hubs).
 - **`synththing admin <command>`** on the server sends those, signed with the server's own key from its data folder, to the running server at its configured address: it works from SSH, under systemd, and in Docker (`docker exec <container> synththing admin ...`), and `update` asks it to update itself (Hosting, below).
 - **Moderation** in the app's Library tab, for admin keys: reports with the lines they point at highlighted in the code and the sprites drawn, and the actions above, signed with the admin's key.
 - **Web admin panel**: parked. Moderation in the app does the job and stays in step with it; if the app ever builds for the web (egui runs in a browser, see TODO), that's the web version.
 - **Rules** and a contact address in `/api/v1/info` (contact@p51.nl on the official server), for reports and takedown requests.
 - **Documents**: a server can offer documents (`documents` in `server.json`: a title, a Phosphor icon, a Markdown file), like its EULA and privacy policy; `/api/v1/info` lists them, `GET /api/v1/documents/{slug}` serves them, and the app's Online Library has an icon button for each (hover: "Read EULA") that opens it, rendered (`egui_commonmark`). The official server's are in `deploy/official/`.
+
+## Hosted hubs
+
+A server can host hubs for people (docs/HUB.md): each a hub of its own with a set amount of room for songs, at its own address. The hubs aren't made by the server but by a hub host, a separate service on the same machine that holds what that takes (the machine's Docker, the volume the hubs share and the account it's billed to) and listens only to the server.
+
+- **`"hubhost"`** in `server.json` is where the hub host listens (`http://host.docker.internal:7444` from a container). Without it, the server hosts no hubs.
+- **Admins** manage the hubs with `AdminAction::Hub` (`server/hubhost.rs`): `list` (every hub with what it uses of its room, the volume they share and what that costs a month), `add` (a name, its room in GB, the owner's ID and a note), `resize` and `destroy` (the hub and every song on it). The app's Moderation window has them in its Hubs tab.
+- **The server signs** each request to the hub host with its own key: `hubhost`, the method, the path, the time, a nonce and the body's SHA-256, each on its own line, in the `x-hubhost-time`, `x-hubhost-nonce` and `x-hubhost-signature` headers. The hub host takes requests signed by the server's key only, each once, within a minute of its time. What it refuses comes back to the admin in its own words.
+- **Signing a hub in** isn't one of the actions: a sign-in link opens the identity's keys, so it never goes through the server.
 
 ## Deletion and retention
 

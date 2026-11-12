@@ -821,7 +821,9 @@ pub fn admin<T: serde::de::DeserializeOwned>(
 ) -> Result<T, String> {
     let path = "/api/v1/admin";
     let body = serde_json::to_vec(action).map_err(|e| e.to_string())?;
-    let request = agent().post(format!("{base}{path}")).header("Content-Type", "application/json");
+    // (Making a hub pulls its image and may grow the volume it's on.)
+    let wait = Duration::from_secs(if matches!(action, AdminAction::Hub(_)) { 320 } else { 20 });
+    let request = agent().post(format!("{base}{path}")).config().timeout_global(Some(wait)).build().header("Content-Type", "application/json");
     read(check(signed(request, server_key, identity, "POST", path, &body).send(&body[..]))?)
 }
 
