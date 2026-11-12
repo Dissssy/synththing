@@ -46,6 +46,8 @@ const SETTLE: Duration = Duration::from_secs(2);
 const RETRY: Duration = Duration::from_secs(60);
 /// How long a song streamed to a device isn't sent to it again, waiting
 /// for it to say it has it.
+/// What the user is told when the hub fills up.
+const HUB_FULL: &str = "Your hub is full: new songs stay on your devices until it has room (Preferences > Library > Storage)";
 const GIVEN_FOR: Duration = Duration::from_secs(5 * 60);
 /// How often a device that hasn't reached the hub directly tries again
 /// (or one that has checks it still does).
@@ -1119,6 +1121,10 @@ impl DeviceSync {
                 {
                     *take_over = false;
                 }
+                // (Once each time it fills up, on the other devices.)
+                if self.hub_offer.is_none() && hub.as_ref().is_some_and(|new| new.full) && !self.hub.as_ref().is_some_and(|old| old.full) {
+                    self.reports.push(Report::Status(HUB_FULL.into()));
+                }
                 if !matches!((&hub, &self.hub), (Some(new), Some(old)) if new.same_place(old)) {
                     // (Reached again, wherever it is now.)
                     self.hub_reached = None;
@@ -1202,13 +1208,18 @@ impl DeviceSync {
         }
     }
 
-    /// Whether this hub has room for more songs (`hub_server::full`): while
-    /// it hasn't, it wants none, and says so for the other devices.
-    pub fn hub_full(&mut self, full: bool) {
-        if let Some((leaf, _)) = &mut self.hub_offer
-            && leaf.full != full
-        {
+    /// This hub's disk, and whether it has room for more songs
+    /// (`hub_server::full`): while it hasn't, it wants none. Both go to the
+    /// other devices, the disk only once it changed enough (`Disk::near`).
+    pub fn hub_room(&mut self, disk: Option<crate::storage::Disk>, full: bool) {
+        let Some((leaf, _)) = &mut self.hub_offer else { return };
+        let disk_moved = match (&leaf.disk, &disk) {
+            (Some(was), Some(now)) => !was.near(now),
+            (was, now) => was.is_some() != now.is_some(),
+        };
+        if leaf.full != full || disk_moved {
             leaf.full = full;
+            leaf.disk = disk;
             self.songs_dirty = true;
         }
     }
@@ -1541,6 +1552,25 @@ mod tests {
             adopt: adopts(state),
             choices: state.choices.clone(),
         }
+    }
+
+    #[test]
+    fn a_hub_tells_its_room_once_it_changed_enough() {
+        use crate::storage::Disk;
+        const GB: u64 = 1 << 30;
+        let mut sync = DeviceSync::default();
+        sync.be_hub(HubLeaf { device: "hub".into(), key: "k".into(), addrs: Vec::new(), checks: Vec::new(), full: false, disk: None });
+        let leaf = |sync: &DeviceSync| sync.hub_offer.as_ref().unwrap().0.clone();
+        let disk = Disk { free: 40 * GB, total: 100 * GB };
+        sync.hub_room(Some(disk), false);
+        assert_eq!(leaf(&sync).disk, Some(disk));
+        sync.songs_dirty = false;
+        sync.hub_room(Some(Disk { free: 40 * GB - GB / 2, ..disk }), false);
+        assert!(!sync.songs_dirty, "too little changed to tell the devices");
+        sync.hub_room(Some(Disk { free: 0, ..disk }), true);
+        assert!(sync.songs_dirty);
+        assert!(leaf(&sync).full);
+        assert_eq!(leaf(&sync).disk, Some(Disk { free: 0, ..disk }));
     }
 
     #[test]

@@ -254,6 +254,9 @@ pub struct HubLeaf {
     /// until it has.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub full: bool,
+    /// Its disk's room, roughly (`Disk::near`), for the devices to show.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disk: Option<crate::storage::Disk>,
 }
 
 impl HubLeaf {
