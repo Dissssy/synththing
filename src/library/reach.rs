@@ -134,7 +134,9 @@ pub fn hint(url: &str, reach: &Reach) -> Option<String> {
         return Some(format!("{host} doesn't resolve ({dns}): check the name"));
     }
     let addrs: Vec<&str> = [&reach.v4, &reach.v6].into_iter().flatten().map(|probe| probe.addr.as_str()).collect();
-    let stale = !reach.from.is_empty() && !addrs.contains(&reach.from.as_str());
+    // (Seen from a private address, the hub is beside the server: that says
+    // nothing about where its name should point.)
+    let stale = reach.from.parse::<IpAddr>().is_ok_and(public) && !addrs.contains(&reach.from.as_str());
     let failed = [&reach.v4, &reach.v6].into_iter().flatten().find(|probe| !matches!(probe.verdict, Verdict::Ok { .. }))?;
     let port = url.rsplit_once(':').and_then(|(_, port)| port.split('/').next()?.parse::<u16>().ok());
     let why = match &failed.verdict {
@@ -212,6 +214,8 @@ mod tests {
         assert!(hint("http://hub.example.org:7390", &stale).unwrap().contains("old address"));
         let no_v6 = Reach { v6: probe("2a01:4f8::1", Verdict::Refused), ..ok.clone() };
         assert!(hint("http://hub.example.org:7390", &no_v6).unwrap().starts_with("it answers, but not over IPv6"));
+        let beside = Reach { v4: probe("5.161.82.164", Verdict::TimedOut), from: "172.30.0.1".into(), ..ok.clone() };
+        assert!(hint("https://hub.example.org", &beside).unwrap().contains("check the port forward"));
         let other = Reach { v4: probe("5.161.82.164", Verdict::OtherHub), ..ok };
         assert!(hint("http://5.161.82.164:7390", &other).unwrap().contains("different machine"));
     }
