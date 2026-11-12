@@ -33,7 +33,7 @@ impl DesktopEntry {
 
 /// Where this binary is, for the texts.
 fn here() -> String {
-    std::env::current_exe().map(|p| p.display().to_string()).unwrap_or_default()
+    crate::exe::display()
 }
 
 impl App {

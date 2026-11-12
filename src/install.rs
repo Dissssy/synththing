@@ -50,7 +50,7 @@ fn same_file(a: &Path, b: &Path) -> bool {
 
 /// This is the installed exe running.
 pub fn is_installed() -> bool {
-    match (std::env::current_exe(), exe()) {
+    match (crate::exe::path(), exe()) {
         (Ok(me), Ok(installed)) => same_file(&me, &installed),
         _ => false,
     }
@@ -69,7 +69,7 @@ pub fn can_install() -> bool {
 /// the uninstall entry. Returns the installed exe, for the caller to start
 /// in place of this one.
 pub fn install() -> Result<PathBuf> {
-    let me = std::env::current_exe().context("finding this program")?;
+    let me = crate::exe::path()?;
     let dir = dir()?;
     fs::create_dir_all(&dir).with_context(|| format!("making {}", dir.display()))?;
     let exe = dir.join("synththing.exe");

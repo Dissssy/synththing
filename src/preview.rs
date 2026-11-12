@@ -68,7 +68,7 @@ pub fn run_process(script: &Path, soundfont: &Path, out: &Path, limit: Duration,
 }
 
 fn spawn(script: &Path, soundfont: &Path, out: &Path, limit: Duration, extra: Vec<String>) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|e| format!("couldn't find this program: {e}"))?;
+    let exe = crate::exe::path().map_err(|e| format!("couldn't start the preview: {e}"))?;
     std::fs::create_dir_all(out).map_err(|e| format!("couldn't make {}: {e}", out.display()))?;
     let log = out.join("preview.log");
     let errors = std::fs::File::create(&log).map_err(|e| format!("couldn't write {}: {e}", log.display()))?;

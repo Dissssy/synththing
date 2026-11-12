@@ -57,6 +57,7 @@ fn preview_command(args: &cli::PreviewArgs, config: &Config) -> i32 {
 
 /// The desktop app: a command-line command if one was given, else the window.
 pub fn main() -> Result<()> {
+    crate::exe::capture();
     // Arguments mean someone ran this from a terminal: attach to it first,
     // so --help, errors and run-script output show up there.
     if std::env::args_os().len() > 1 && cli::attach_console() {

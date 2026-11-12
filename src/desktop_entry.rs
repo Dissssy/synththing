@@ -35,7 +35,7 @@ fn icon_path() -> Result<PathBuf> {
 
 /// The entry is there and starts this binary.
 pub fn is_added() -> bool {
-    let (Ok(me), Ok(path)) = (std::env::current_exe(), path()) else { return false };
+    let (Ok(me), Ok(path)) = (crate::exe::path(), path()) else { return false };
     let (Some(me), Ok(text)) = (me.to_str(), fs::read_to_string(path)) else { return false };
     let wanted = format!("TryExec={}", escape_value(me));
     text.lines().any(|line| line == wanted)
@@ -52,7 +52,7 @@ pub fn can_add() -> bool {
 /// Write the icon and the entry, starting this binary (replacing an entry
 /// for a copy somewhere else).
 pub fn add() -> Result<()> {
-    let me = std::env::current_exe().context("finding this program")?;
+    let me = crate::exe::path()?;
     let exe = me.to_str().with_context(|| format!("{} isn't a path a menu entry can hold", me.display()))?;
     write(&icon_path()?, ICON_PNG).context("adding the icon")?;
     write(&path()?, entry(exe).as_bytes()).context("adding the menu entry")?;
