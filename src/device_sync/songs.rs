@@ -364,10 +364,10 @@ mod tests {
     /// the song back.
     #[test]
     fn a_song_removed_meanwhile_stays_removed() {
-        let root = std::env::temp_dir().join(format!("synththing-removed-meanwhile-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&root);
-        crate::config::set_config_dir(&root.join("config")).unwrap();
-        let dir = root.join("phone");
+        // (The worker saves its states in the config folder.)
+        crate::config::test_config_dir();
+        let dir = std::env::temp_dir().join(format!("synththing-removed-meanwhile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         let mut store = SongStore::open(dir.clone());
         let song = crate::song_store::write_in(b"live", "Song (live).mid", &dir).unwrap();
         store.add(song.clone());
@@ -411,6 +411,6 @@ mod tests {
         worker.handle(Request::Songs(songs(&store, 1)));
         let fields = &worker.library.as_ref().unwrap().fields;
         assert!(!fields.contains_key(&key) && fields.contains_key(&removed));
-        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

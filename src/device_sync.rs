@@ -1362,10 +1362,7 @@ impl DeviceSync {
     /// A song fetched from the other devices joins the library, unless it
     /// was removed from every device as it came (it's deleted again).
     fn take_fetched(&mut self, songs: &mut SongStore, key: String) {
-        if songs.is_removed(&key) {
-            if let Err(e) = songs.discard(&key) {
-                log::warn!("{e:#}");
-            }
+        if songs.refuse_removed(&key) {
             return;
         }
         let name = name_of(songs, &key);

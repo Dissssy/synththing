@@ -28,11 +28,11 @@ Everything is JSON. Errors come back as `{"error": "..."}` with a status: 400 (s
 | `GET /v1/now-playing` | read | What's playing (below) |
 | `GET /v1/songs?q=&offset=&limit=&since=` | read | `{"total", "songs": [...], "revision", "full"}`: the songs `q` finds, sorted by file name: `limit` of them (at most and by default 500) after skipping `offset`. With `since` (a `revision` an earlier answer gave), only the songs that changed after it, and `removed`: the keys of those that left the list (below) |
 | `GET /v1/songs/{key}` | read | One song, by the `key` the other requests give |
-| `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already |
+| `POST /v1/songs?name=Song.mp3` | add songs | Adds the file sent as the body (up to 250 MB) to the library: 201 with the song if it's new, 200 if it was there already, 409 if it was removed from all your devices (only importing it in synththing brings it back) |
 | `POST /v1/staged?name=Song.mp3` | add songs | Stages the file sent as the body (below): read, but not in the library. 201 with it if it's new, 200 if it was staged already |
 | `GET /v1/staged` | add songs | The staged songs (below) |
 | `POST /v1/staged/check?keys=` | add songs | Matches the staged songs `keys` (comma separated; all of them without it) at MusicBrainz, album by album (below). 409 if online lookups are off |
-| `POST /v1/staged/{key}/import` | add songs | Adds the staged song to the library, with its match, as `POST /v1/songs` would: 201 with the song if it's new to the library, 200 if it was there already, 404 if it isn't staged |
+| `POST /v1/staged/{key}/import` | add songs | Adds the staged song to the library, with its match, as `POST /v1/songs` would: 201 with the song if it's new to the library, 200 if it was there already, 409 if it was removed from all your devices, 404 if it isn't staged |
 | `DELETE /v1/staged/{key}` | add songs | Drops the staged song: 204, or 404 |
 | `GET /v1/playlists` | read | `[{"id", "name", "smart", "songs": [keys]}]` |
 | `POST` / `DELETE /v1/songs/{key}/star` | edit library | Stars the song, or unstars it: 204 |

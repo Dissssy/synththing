@@ -18,7 +18,7 @@ use std::time::{Instant, SystemTime};
 
 use eframe::egui;
 
-use crate::api::{self, Access, Call, Edit, PlaylistRef, SongInfo};
+use crate::api::{self, Access, Call, Edit, PlaylistRef, Refused, SongInfo};
 use crate::config::Config;
 use crate::device::Device;
 use crate::device_messages::{self, Envelope, Outbox, Route};
@@ -425,8 +425,11 @@ fn set_tag(here: &mut Here, key: &str, id: &str, on: bool) -> Option<()> {
 /// A song a program sent into the library, its file read (the hub has no
 /// window reading them as they come): marked as the program's if it's new,
 /// matched as `online` says unless it's matched already.
-fn add(here: &mut Here, stored: Stored, program: &str, online: Option<Online>) -> Result<(SongInfo, bool), String> {
+fn add(here: &mut Here, stored: Stored, program: &str, online: Option<Online>) -> Result<(SongInfo, bool), Refused> {
     let key = stored.key.clone();
+    if here.songs.refuse_removed(&key) {
+        return Err(Refused::Removed);
+    }
     let new = here.songs.get_by_key(&key).is_none();
     here.songs.add(stored);
     let path = here.songs.path(&key);
@@ -444,7 +447,7 @@ fn add(here: &mut Here, stored: Stored, program: &str, online: Option<Online>) -
         here.songs.set_online(vec![(key.clone(), online)]);
     }
     here.sync.songs_changed();
-    let song = here.songs.get_by_key(&key).ok_or("the song didn't stay in the library")?;
+    let song = here.songs.get_by_key(&key).ok_or_else(|| Refused::NotReady("the song didn't stay in the library".into()))?;
     Ok((SongInfo::of(&key, song, here.songs), new))
 }
 
@@ -572,6 +575,16 @@ mod tests {
         assert_eq!((listed.len(), listed[0].wish.note.as_str()), (1, "from the bridge"));
         asked(&mut api, here, |reply| Call::Edit(Edit::Unwish { id: info.id.clone() }, reply)).unwrap();
         assert!(asked(&mut api, here, |reply| Call::Wishlist(String::new(), reply)).is_empty());
+
+        // (Removed from every device, then sent again: it stays removed,
+        // its file gone. Only importing it by hand brings it back.)
+        here.songs.remove_everywhere(&key).unwrap();
+        let again = crate::song_store::write_in(midi, "Theme.mid", &music).unwrap();
+        let refused = asked(&mut api, here, |reply| Call::Add { stored: again.clone(), program: "bridge".into(), online: None, reply });
+        assert!(matches!(refused, Err(Refused::Removed)));
+        assert!(here.songs.is_removed(&key) && !here.songs.has(&key) && !here.songs.path(&key).exists());
+        here.songs.add(crate::song_store::write_in(midi, "Theme.mid", &music).unwrap());
+        assert!(!here.songs.is_removed(&key) && here.songs.has(&key));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

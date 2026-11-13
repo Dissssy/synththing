@@ -750,6 +750,15 @@ pub fn set_config_dir(dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// The config folder the tests share, the same for the whole run: never
+/// the user's own, and left in place while tests run (other tests write
+/// into it too).
+#[cfg(test)]
+pub fn test_config_dir() -> PathBuf {
+    set_config_dir(&std::env::temp_dir().join(format!("synththing-test-config-{}", std::process::id()))).unwrap();
+    config_dir().unwrap()
+}
+
 /// The config folder given instead of the usual one, if one was.
 pub fn config_dir_override() -> Option<PathBuf> {
     CONFIG_DIR
