@@ -44,6 +44,9 @@ pub(super) struct Songs {
     pub hub: Option<(HubLeaf, bool)>,
     pub library: bool,
     pub transfers: bool,
+    /// How many synced libraries (`Reply::Taken`) the store has taken: one
+    /// the worker sent since isn't in it yet.
+    pub libraries_taken: u64,
 }
 
 pub(super) enum Request {
@@ -100,7 +103,7 @@ pub(super) fn spawn(events: Sender<Done>, wanted_ids: Arc<Mutex<HashMap<String, 
     std::thread::Builder::new()
         .name("song sync".into())
         .spawn(move || {
-            let mut worker = Worker { library: None, transfers: None, wanted: BTreeSet::new(), wanted_ids, events, replies };
+            let mut worker = Worker { library: None, transfers: None, wanted: BTreeSet::new(), libraries_sent: 0, wanted_ids, events, replies };
             for request in inbox {
                 worker.handle(request);
             }
@@ -114,6 +117,8 @@ struct Worker {
     transfers: Option<State>,
     /// The songs this device wants, as of the last songs sent.
     wanted: BTreeSet<String>,
+    /// How many synced libraries it's sent to be taken (`Songs::libraries_taken`).
+    libraries_sent: u64,
     wanted_ids: Arc<Mutex<HashMap<String, String>>>,
     events: Sender<Done>,
     replies: Sender<Reply>,
@@ -244,8 +249,11 @@ impl Worker {
     }
 
     /// Note the songs here in the synced library.
+    /// Not from songs that haven't taken the last library sent yet: those
+    /// would say a song removed from every device meanwhile is still here
+    /// and not removed, bringing it back everywhere.
     fn record_library(&mut self, songs: &Songs) {
-        if !songs.library {
+        if !songs.library || songs.libraries_taken != self.libraries_sent {
             return;
         }
         let Some(state) = &mut self.library else { return };
@@ -320,6 +328,89 @@ impl Worker {
         if changed {
             self.reply(Reply::Changed(blob));
         }
+        if library.is_some() {
+            self.libraries_sent += 1;
+        }
         self.reply(Reply::Taken { blob, revisions: outcome.revisions, library });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings_sync::{Field, Fields};
+
+    fn songs(store: &SongStore, libraries_taken: u64) -> Box<Songs> {
+        Box::new(Songs {
+            store: store.clone(),
+            listed: Vec::new(),
+            wants: song_sync::Wants { starred: false, every: false },
+            device: "phone".into(),
+            device_name: "Phone".into(),
+            given: BTreeSet::new(),
+            busy: BTreeSet::new(),
+            paused: false,
+            hub_direct: false,
+            hub_only: false,
+            hub: None,
+            library: true,
+            transfers: false,
+            libraries_taken,
+        })
+    }
+
+    /// A phone that was offline comes back to a song removed from every
+    /// device meanwhile: songs it noted before taking that in don't bring
+    /// the song back.
+    #[test]
+    fn a_song_removed_meanwhile_stays_removed() {
+        let root = std::env::temp_dir().join(format!("synththing-removed-meanwhile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        crate::config::set_config_dir(&root.join("config")).unwrap();
+        let dir = root.join("phone");
+        let mut store = SongStore::open(dir.clone());
+        let song = crate::song_store::write_in(b"live", "Song (live).mid", &dir).unwrap();
+        store.add(song.clone());
+        let key = song.key.clone();
+        let removed = format!("removed/{key}");
+
+        let before = song_sync::library_leaves(&store, &BTreeMap::new());
+        let (replies, outbox) = mpsc::channel();
+        let (events, _) = mpsc::channel();
+        let mut worker = Worker {
+            library: Some(State::of(&[4; 32], before.clone())),
+            transfers: None,
+            wanted: BTreeSet::new(),
+            libraries_sent: 0,
+            wanted_ids: Arc::default(),
+            events,
+            replies,
+        };
+        let local = worker.library.as_ref().unwrap().fields.clone();
+
+        // The desktop removed it everywhere while the phone was away.
+        let mut merged: Fields = before.iter().filter(|(k, _)| **k != key).map(|(k, v)| (k.clone(), Field { value: v.clone(), changed: 1 })).collect();
+        merged.insert(removed.clone(), Field { value: serde_json::json!({ "name": "Song (live).mid", "at": 1 }), changed: 1 });
+        let outcome = Outcome { revisions: vec![2], merged, local, changes: Vec::new() };
+        worker.handle(Request::Synced(Blob::Library, outcome, songs(&store, 0)));
+        let library = outbox.try_iter().find_map(|reply| match reply {
+            Reply::Taken { library, .. } => library,
+            _ => None,
+        });
+        let library = library.expect("a library to take");
+
+        // Songs noted before the phone took it: nothing comes back.
+        worker.handle(Request::Songs(songs(&store, 0)));
+        let fields = &worker.library.as_ref().unwrap().fields;
+        assert!(!fields.contains_key(&key), "the removed song stays out of the library");
+        assert!(fields.contains_key(&removed), "and stays removed");
+
+        // Taken in, the phone deletes it; noted then, it stays removed.
+        song_sync::apply_library(&mut store, library);
+        assert!(!store.has(&key));
+        worker.handle(Request::Songs(songs(&store, 1)));
+        let fields = &worker.library.as_ref().unwrap().fields;
+        assert!(!fields.contains_key(&key) && fields.contains_key(&removed));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
