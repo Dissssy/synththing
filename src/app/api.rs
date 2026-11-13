@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use eframe::egui;
 
 use super::{setting_label, setting_row, settings_group, with_info, App};
-use crate::api::{self, Access, Call, NowPlaying, PlaylistInfo, PlaylistRef, SongInfo};
+use crate::api::{self, Access, Call, NowPlaying, PlaylistInfo, PlaylistRef, Refused, SongInfo};
 use crate::audio::PlaybackShared;
 use crate::commands::Command;
 use crate::engine::EngineView;
@@ -271,13 +271,16 @@ impl App {
     /// A song `program` sent, stored already, into the library: marked as
     /// the program's if it's new there, and matched at MusicBrainz as
     /// `online` says unless it's matched already.
-    fn api_add(&mut self, stored: crate::song_store::Stored, program: &str, online: Option<crate::song_store::Online>) -> Result<(SongInfo, bool), String> {
+    fn api_add(&mut self, stored: crate::song_store::Stored, program: &str, online: Option<crate::song_store::Online>) -> Result<(SongInfo, bool), Refused> {
         // (The one-time import writes the library's index last: until
         // then, nothing else may.)
         if self.old_import.is_some() {
-            return Err("synththing is still setting up its library: try again in a moment".into());
+            return Err(Refused::NotReady("synththing is still setting up its library: try again in a moment".into()));
         }
         let key = stored.key.clone();
+        if self.songs.refuse_removed(&key) {
+            return Err(Refused::Removed);
+        }
         let new = self.songs.get_by_key(&key).is_none();
         self.add_to_library([stored]);
         if new {
@@ -287,7 +290,7 @@ impl App {
             self.songs.set_online(vec![(key.clone(), online)]);
             self.songs_changed();
         }
-        let song = self.songs.get_by_key(&key).ok_or("the song didn't stay in the library")?;
+        let song = self.songs.get_by_key(&key).ok_or_else(|| Refused::NotReady("the song didn't stay in the library".into()))?;
         Ok((SongInfo::of(&key, song, &self.songs), new))
     }
 

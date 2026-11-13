@@ -166,6 +166,27 @@ impl Access {
 }
 
 /// Something only the app can answer, with where to send the answer.
+/// Why a song a program sent didn't go into the library (`Call::Add`).
+#[derive(Debug)]
+pub enum Refused {
+    /// Not yet: why.
+    NotReady(String),
+    /// It was removed from every device: only importing it by hand brings
+    /// it back (`SongStore::refuse_removed`).
+    Removed,
+}
+
+/// The reply to a song a program sent: 201 with the song if it's new to the
+/// library, 200 if it was there already.
+fn added(answer: Result<Result<(SongInfo, bool), Refused>, Reply>) -> Reply {
+    match answer {
+        Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
+        Ok(Err(Refused::NotReady(why))) => error(503, why),
+        Ok(Err(Refused::Removed)) => error(409, "that song was removed from all your devices: import it in synththing to bring it back"),
+        Err(reply) => reply,
+    }
+}
+
 pub enum Call {
     /// Run a command: `Err` if it can't run now.
     Command(Command, Sender<Result<(), String>>),
@@ -204,7 +225,7 @@ pub enum Call {
         stored: Stored,
         program: String,
         online: Option<song_store::Online>,
-        reply: Sender<Result<(SongInfo, bool), String>>,
+        reply: Sender<Result<(SongInfo, bool), Refused>>,
     },
     /// The wishlist, those `query` keeps (`wishlist_search`): its wishes
     /// with what of each is here, an artist's albums under them.
@@ -1379,11 +1400,7 @@ fn add_song(shared: &Shared, request: &mut Request, access: &Access, query: &Has
         Ok(stored) => stored,
         Err(e) => return error(500, format!("couldn't store the song: {e:#}")),
     };
-    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), online: None, reply }) {
-        Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
-        Ok(Err(why)) => error(503, why),
-        Err(reply) => reply,
-    }
+    added(ask(shared, |reply| Call::Add { stored, program: access.name.clone(), online: None, reply }))
 }
 
 /// The song file sent as the body, named `?name=`: its name and bytes, if
@@ -1551,11 +1568,7 @@ fn import_staged(shared: &Shared, access: &Access, key: &str) -> Reply {
         Ok(None) => return error(404, "there's no staged song with that key"),
         Err(e) => return error(500, format!("couldn't import it: {e:#}")),
     };
-    match ask(shared, |reply| Call::Add { stored, program: access.name.clone(), online, reply }) {
-        Ok(Ok((song, new))) => json(if new { 201 } else { 200 }, &song),
-        Ok(Err(why)) => error(503, why),
-        Err(reply) => reply,
-    }
+    added(ask(shared, |reply| Call::Add { stored, program: access.name.clone(), online, reply }))
 }
 
 /// `None` if MusicBrainz may be asked from here (Online album art and

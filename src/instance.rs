@@ -124,11 +124,7 @@ mod tests {
     /// request; once the first is gone, the folder can be claimed again.
     #[test]
     fn one_app_per_folder() {
-        let dir = std::env::temp_dir().join(format!("synththing-instance-test-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        crate::config::set_config_dir(&dir).unwrap();
-        // (Other tests may have set the folder first: use whichever won.)
-        let dir = crate::config::config_dir().unwrap();
+        let dir = crate::config::test_config_dir();
         let _ = fs::remove_file(dir.join("show-request"));
 
         let Claim::First(guard) = claim().unwrap() else { panic!("the first claim gets it") };

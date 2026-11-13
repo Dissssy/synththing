@@ -264,6 +264,8 @@ pub struct DeviceSync {
     worker: (Sender<songs::Request>, Receiver<songs::Reply>),
     /// The songs went to the worker; the next change waits for its plan.
     songs_pending: bool,
+    /// How many synced libraries the songs have taken (`Songs::libraries_taken`).
+    libraries_taken: u64,
     /// What the last poll brought, to hand over.
     reports: Vec<Report>,
     /// Held while an update is offered: nothing starts, and the songs
@@ -341,6 +343,7 @@ impl Default for DeviceSync {
             progress: Progress::default(),
             worker,
             songs_pending: false,
+            libraries_taken: 0,
             reports: Vec::new(),
             held: Arc::default(),
             hub: None,
@@ -1074,6 +1077,7 @@ impl DeviceSync {
             hub: hub_offer,
             library: self.syncing(Blob::Library),
             transfers: self.syncing(Blob::Transfers),
+            libraries_taken: self.libraries_taken,
         })
     }
 
@@ -1106,10 +1110,11 @@ impl DeviceSync {
             songs::Reply::Skipped(blob) => self.channel(blob).running = false,
             songs::Reply::Taken { blob, revisions, library } => {
                 self.channel(blob).revisions = revisions;
-                if let Some(library) = library
-                    && song_sync::apply_library(here.songs, library)
-                {
-                    self.reports.push(Report::LibraryChanged);
+                if let Some(library) = library {
+                    self.libraries_taken += 1;
+                    if song_sync::apply_library(here.songs, library) {
+                        self.reports.push(Report::LibraryChanged);
+                    }
                 }
                 self.songs_dirty = true;
             }
@@ -1357,10 +1362,7 @@ impl DeviceSync {
     /// A song fetched from the other devices joins the library, unless it
     /// was removed from every device as it came (it's deleted again).
     fn take_fetched(&mut self, songs: &mut SongStore, key: String) {
-        if songs.is_removed(&key) {
-            if let Err(e) = songs.discard(&key) {
-                log::warn!("{e:#}");
-            }
+        if songs.refuse_removed(&key) {
             return;
         }
         let name = name_of(songs, &key);

@@ -486,6 +486,20 @@ impl SongStore {
         self.save();
     }
 
+    /// Whether the song `key`, just brought in by something other than the
+    /// user (a program, another device), was removed from every device: its
+    /// file is deleted again. Only the user importing it again (`add`) brings
+    /// it back.
+    pub fn refuse_removed(&mut self, key: &str) -> bool {
+        if !self.is_removed(key) {
+            return false;
+        }
+        if let Err(e) = self.discard(key) {
+            log::warn!("{e:#}");
+        }
+        true
+    }
+
     /// Note a song that isn't here (yet) by its key and name, unless it's
     /// known already.
     pub fn know(&mut self, key: &str, name: &str) {
