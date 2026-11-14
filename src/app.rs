@@ -1176,6 +1176,7 @@ impl App {
 
 impl eframe::App for App {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut Frame) {
+        frame_timing::ui_begin();
         frame_timing::report(frame.info().cpu_usage);
         let ctx = ui.ctx().clone();
         if !crate::usage::hardware_known()
