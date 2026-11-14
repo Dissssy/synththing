@@ -110,9 +110,10 @@ struct Watch {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Stage {
-    /// Between `begin` and `end`.
+    /// Between `begin` and `logic_done`, and `ui_begin` and `end`.
     App,
-    /// After `end`: egui's painting, the GPU, the window system, or idle.
+    /// After `logic_done` or `end`: egui's painting, the GPU, the window
+    /// system, or idle.
     Outside,
 }
 
@@ -242,10 +243,20 @@ pub fn begin(size: Option<egui::Vec2>) {
 /// `expect_next_within`) when it wants the next one: the watchdog goes by
 /// that from now on. (Called whether or not the frame is drawn, so a
 /// hidden window's last tick, wanting nothing, turns the watchdog off.)
+/// The thread leaves the app's code for eframe, which calls `ui_begin`
+/// only if it draws: an Android app sent to the background may not, and
+/// that wait isn't a hang in the app's code.
 pub fn logic_done() {
     let due = FRAME.with_borrow(|f| f.due);
     if let Some(watch) = WATCH.lock().unwrap().as_mut() {
-        watch.due = due;
+        (watch.since, watch.stage, watch.due, watch.logged) = (Instant::now(), Stage::Outside, due, Duration::ZERO);
+    }
+}
+
+/// eframe is drawing the frame: back in the app's code, till `end`.
+pub fn ui_begin() {
+    if let Some(watch) = WATCH.lock().unwrap().as_mut() {
+        (watch.since, watch.stage, watch.logged) = (Instant::now(), Stage::App, Duration::ZERO);
     }
 }
 
