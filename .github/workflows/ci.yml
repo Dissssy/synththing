@@ -26,8 +26,15 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# A release commit (cargo release's "Release X.Y.Z", release.toml) skips
+# every job: Cut release (cut-release.yml) only releases a commit CI passed,
+# and the release commit adds nothing but the version, the changelog and
+# the "next" -> version replacements. Running again would only hold the
+# runners release.yml builds on.
+
 jobs:
   test:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release ')
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
@@ -42,6 +49,7 @@ jobs:
   # Linux (experimental, see docs/LINUX.md): it builds and its tests pass,
   # and this keeps it that way.
   linux:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release ')
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.RUNNER && format('{0}-linux', vars.RUNNER) || 'ubuntu-latest' }}
     steps:
       - uses: actions/checkout@v5
@@ -70,6 +78,7 @@ jobs:
   # The docs website (book.toml) builds: every page in docs/SUMMARY.md is
   # there.
   docs:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release ')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -84,6 +93,7 @@ jobs:
   # The Android app (docs/ANDROID.md): it builds, so the desktop app's
   # changes don't quietly break it.
   android:
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'Release ')
     # (Not for a fork's pull request: its code doesn't run on our runner.)
     runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || vars.RUNNER && format('{0}-android', vars.RUNNER) || 'ubuntu-latest' }}
     steps:

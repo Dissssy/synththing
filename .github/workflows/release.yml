@@ -47,8 +47,8 @@ jobs:
           retention-days: 1
 
   # The three builds side by side, each into an artifact; publish puts
-  # them in the release together. No tests here: CI (ci.yml) tests the
-  # release commit when it's pushed to master.
+  # them in the release together. No tests here: Cut release
+  # (cut-release.yml) only tags a commit CI (ci.yml) passed.
   windows:
     needs: check
     runs-on: ${{ vars.RUNNER && format('{0}-windows', vars.RUNNER) || 'ubuntu-latest' }}  # see ci.yml
