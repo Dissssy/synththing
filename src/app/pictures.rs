@@ -3,7 +3,6 @@
 //! once it's kept, what it was picked for shows it.
 
 use super::App;
-use crate::song_store::Art;
 
 /// What a picture's being picked for.
 pub(super) enum PictureFor {
@@ -31,7 +30,7 @@ impl App {
                     self.set_playlist_image(list, Some(image));
                 }
             }
-            Some(PictureFor::Album(keys)) => self.choose_art(&keys, Some(Art::Image(image))),
+            Some(PictureFor::Album(keys)) => self.picked_album_picture(keys, image),
             Some(PictureFor::Artist(name)) => self.set_artist_image(&name, Some(image)),
             None => {}
         }

@@ -1,14 +1,16 @@
 //! Choose art: picking what an album's shown with (`song_store::Art`,
 //! synced with its songs): what its files have, a picture of its release
 //! at the Cover Art Archive, one of the iTunes Store's covers, asked
-//! for on demand, or a picture of one's own (`pictures.rs`).
+//! for on demand, or a picture of one's own (`pictures.rs`). A choice is
+//! selected first, the one in use to start with, and only kept with Use
+//! this.
 
 use std::path::PathBuf;
 use std::sync::mpsc;
 
 use eframe::egui;
 
-use super::App;
+use super::{App, fit_width};
 use crate::album_art::Source;
 use crate::build_info;
 use crate::lookup::art::{self, Choice};
@@ -47,6 +49,8 @@ pub(super) struct ChooseArt {
     /// Where its art comes from now, but for a choice.
     file: Option<PathBuf>,
     release: Option<(String, Option<String>)>,
+    /// The choice selected (`None`: Automatic), kept with Use this.
+    selected: Option<Art>,
     archive: Option<Asked>,
     itunes: Option<Asked>,
 }
@@ -55,7 +59,18 @@ impl App {
     /// Open Choose art for the album `title` (by `artist`) of the songs
     /// `keys`, whose art comes from `from`.
     pub(super) fn open_choose_art(&mut self, title: &str, artist: Option<String>, keys: Vec<String>, from: Source) {
-        self.choose_art = Some(ChooseArt { title: title.to_string(), artist, keys, file: from.file, release: from.release, archive: None, itunes: None });
+        let selected = self.chosen_art(&keys);
+        self.choose_art =
+            Some(ChooseArt { title: title.to_string(), artist, keys, file: from.file, release: from.release, selected, archive: None, itunes: None });
+    }
+
+    /// Select the picture of one's own kept as `image` for the album
+    /// `keys`, if Choose art's still open for it; else show it with it.
+    pub(super) fn picked_album_picture(&mut self, keys: Vec<String>, image: String) {
+        match &mut self.choose_art {
+            Some(choose) if choose.keys == keys => choose.selected = Some(Art::Image(image)),
+            _ => self.choose_art(&keys, Some(Art::Image(image))),
+        }
     }
 
     /// The art chosen for the open album (`None`: as it'd be by itself).
@@ -69,7 +84,7 @@ impl App {
         self.songs_changed();
     }
 
-    /// The Choose art window, while it's open.
+    /// The Choose art dialog, while it's open.
     pub(super) fn choose_art_ui(&mut self, ctx: &egui::Context) {
         let Some(mut choose) = self.choose_art.take() else { return };
         let online = build_info::online(build_info::Online::Lookup);
@@ -84,63 +99,72 @@ impl App {
             asked.poll();
         }
         let chosen = self.chosen_art(&choose.keys);
-        let mut pick: Option<Option<Art>> = None;
-        let mut open = true;
+        let mut keep = false;
+        let mut close = false;
         let mut search_itunes = false;
         let mut turn_on = false;
         let mut pick_own = false;
         let art = &mut self.groupings.art;
-        egui::Window::new(format!("Art for {}", choose.title))
-            .id(egui::Id::unique("choose_art"))
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(true)
-            .constrain_to(super::window_room(ctx))
-            .default_width(4.0 * (TILE + 12.0))
-            .show(ctx, |ui| {
-                egui::ScrollArea::vertical().max_height(520.0).show(ui, |ui| {
-                    let automatic = Source { file: choose.file.clone(), release: choose.release.clone(), chosen: None, image: None };
-                    let mut tiles: Vec<(Source, String, Option<Art>)> = vec![(automatic, "Automatic".into(), None)];
-                    if choose.file.is_some() {
-                        let files = Source { file: choose.file.clone(), chosen: Some(Art::Files), ..Source::default() };
-                        tiles.push((files, "From its files".into(), Some(Art::Files)));
+        let response = egui::Modal::new(egui::Id::unique("choose_art")).show(ctx, |ui| {
+            ui.set_width(fit_width(ui, 4.0 * (TILE + 12.0)));
+            ui.add(egui::Label::new(egui::RichText::new(format!("Art for {}", choose.title)).heading()).truncate());
+            if let Some(artist) = &choose.artist {
+                ui.weak(artist);
+            }
+            ui.add_space(4.0);
+            let height = (ctx.content_rect().height() - 200.0).clamp(160.0, 520.0);
+            egui::ScrollArea::vertical().max_height(height).show(ui, |ui| {
+                let automatic = Source { file: choose.file.clone(), release: choose.release.clone(), chosen: None, image: None };
+                let mut tiles: Vec<(Source, String, Option<Art>)> = vec![(automatic, "Automatic".into(), None)];
+                if choose.file.is_some() {
+                    let files = Source { file: choose.file.clone(), chosen: Some(Art::Files), ..Source::default() };
+                    tiles.push((files, "From its files".into(), Some(Art::Files)));
+                }
+                // (One's own picture in use, and one just picked, if another.)
+                for image in [&chosen, &choose.selected].into_iter().flatten() {
+                    if matches!(image, Art::Image(_)) && !tiles.iter().any(|(_, _, this)| this.as_ref() == Some(image)) {
+                        tiles.push((Source { chosen: Some(image.clone()), ..Source::default() }, "Your picture".into(), Some(image.clone())));
                     }
-                    if let Some(Art::Image(key)) = &chosen {
-                        tiles.push((Source { chosen: chosen.clone(), ..Source::default() }, "Your picture".into(), Some(Art::Image(key.clone()))));
-                    }
-                    ui.weak("Automatic: its files' art, else its release's front cover once it's matched at MusicBrainz.");
-                    choices_ui(ui, art, &tiles, &chosen, &mut pick, &choose.title);
-                    pick_own = ui.button("Pick a picture...").on_hover_text("Show it with a picture of your own").clicked();
+                }
+                ui.weak("Automatic: its files' art, else its release's front cover once it's matched at MusicBrainz.");
+                choices_ui(ui, art, &tiles, &chosen, &mut choose.selected, &choose.title);
+                pick_own = ui.button("Pick a picture...").on_hover_text("Choose a picture of your own").clicked();
 
-                    if !online {
-                        ui.separator();
-                        ui.horizontal_wrapped(|ui| {
-                            ui.weak(build_info::Online::Lookup.off_note());
-                            turn_on = ui.button("Turn on for this run").clicked();
-                        });
-                        return;
-                    }
+                if !online {
                     ui.separator();
-                    ui.strong("Cover Art Archive");
-                    match &choose.archive {
-                        None => {
-                            ui.weak("It isn't matched at MusicBrainz yet.");
-                        }
-                        Some(asked) => asked_ui(ui, art, asked, &chosen, &mut pick, &choose.title, "It has no pictures there."),
-                    }
-
-                    ui.separator();
-                    ui.horizontal(|ui| {
-                        ui.strong("iTunes Store");
-                        if choose.itunes.is_none() {
-                            search_itunes = ui.button("Search").on_hover_text("Ask the iTunes Store for covers of albums named like it").clicked();
-                        }
+                    ui.horizontal_wrapped(|ui| {
+                        ui.weak(build_info::Online::Lookup.off_note());
+                        turn_on = ui.button("Turn on for this run").clicked();
                     });
-                    if let Some(asked) = &choose.itunes {
-                        asked_ui(ui, art, asked, &chosen, &mut pick, &choose.title, "It found nothing named like it.");
+                    return;
+                }
+                ui.separator();
+                ui.strong("Cover Art Archive");
+                match &choose.archive {
+                    None => {
+                        ui.weak("It isn't matched at MusicBrainz yet.");
+                    }
+                    Some(asked) => asked_ui(ui, art, asked, &chosen, &mut choose.selected, &choose.title, "It has no pictures there."),
+                }
+
+                ui.separator();
+                ui.horizontal(|ui| {
+                    ui.strong("iTunes Store");
+                    if choose.itunes.is_none() {
+                        search_itunes = ui.button("Search").on_hover_text("Ask the iTunes Store for covers of albums named like it").clicked();
                     }
                 });
+                if let Some(asked) = &choose.itunes {
+                    asked_ui(ui, art, asked, &chosen, &mut choose.selected, &choose.title, "It found nothing named like it.");
+                }
             });
+            ui.add_space(8.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                close = ui.button("Cancel").clicked();
+                keep =
+                    ui.add_enabled(choose.selected != chosen, egui::Button::new("Use this")).on_disabled_hover_text("It's shown with this already").clicked();
+            });
+        });
         if turn_on {
             self.set_online(build_info::Online::Lookup, true);
         }
@@ -154,25 +178,17 @@ impl App {
             };
             choose.itunes = Some(Asked::start(move || art::itunes(&term).map(|found| found.iter().map(art::Listed::choice).collect())));
         }
-        if let Some(art) = pick {
-            self.choose_art(&choose.keys, art);
+        if keep {
+            self.choose_art(&choose.keys, choose.selected.clone());
         }
-        if open {
+        if !(keep || close || response.should_close()) {
             self.choose_art = Some(choose);
         }
     }
 }
 
 /// Online pictures being asked for: a spinner, the error, or the choices.
-fn asked_ui(
-    ui: &mut egui::Ui,
-    art: &mut crate::album_art::AlbumArt,
-    asked: &Asked,
-    chosen: &Option<Art>,
-    pick: &mut Option<Option<Art>>,
-    title: &str,
-    none: &str,
-) {
+fn asked_ui(ui: &mut egui::Ui, art: &mut crate::album_art::AlbumArt, asked: &Asked, chosen: &Option<Art>, selected: &mut Option<Art>, title: &str, none: &str) {
     match asked {
         Asked::Waiting(_) => {
             ui.spinner();
@@ -186,18 +202,19 @@ fn asked_ui(
         Asked::Done(Ok(found)) => {
             let tiles: Vec<(Source, String, Option<Art>)> =
                 found.iter().map(|c| (Source::url(&c.url), c.label.clone(), Some(Art::Url(c.url.clone())))).collect();
-            choices_ui(ui, art, &tiles, chosen, pick, title);
+            choices_ui(ui, art, &tiles, chosen, selected, title);
         }
     }
 }
 
-/// A row (wrapping) of pictures to choose from, the chosen one outlined.
+/// A row (wrapping) of pictures to choose from: the selected one outlined,
+/// the one in use noted under its name.
 fn choices_ui(
     ui: &mut egui::Ui,
     art: &mut crate::album_art::AlbumArt,
     tiles: &[(Source, String, Option<Art>)],
     chosen: &Option<Art>,
-    pick: &mut Option<Option<Art>>,
+    selected: &mut Option<Art>,
     title: &str,
 ) {
     ui.horizontal_wrapped(|ui| {
@@ -206,15 +223,18 @@ fn choices_ui(
                 ui.set_width(TILE);
                 let (rect, response) = ui.allocate_exact_size(egui::vec2(TILE, TILE), egui::Sense::click());
                 art.tile(ui, rect, source, title);
-                if this == chosen {
+                if this == selected {
                     ui.painter().rect_stroke(rect.expand(2.0), 4.0, ui.visuals().selection.stroke, egui::StrokeKind::Outside);
                 } else if response.hovered() {
                     ui.painter().rect_stroke(rect.expand(2.0), 4.0, ui.visuals().widgets.hovered.fg_stroke, egui::StrokeKind::Outside);
                 }
-                if response.on_hover_text("Show the album with this").clicked() {
-                    *pick = Some(this.clone());
+                if response.on_hover_text("Select this").clicked() {
+                    *selected = this.clone();
                 }
                 ui.add(egui::Label::new(egui::RichText::new(label).small()).truncate());
+                if this == chosen {
+                    ui.label(egui::RichText::new("In use").small().weak());
+                }
             });
         }
     });
