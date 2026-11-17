@@ -2,6 +2,31 @@
 
 What changed in each version of synththing, newest first. The app shows the new parts after an update (and all of it under Help > Changelog...). Changes not released yet are in `changelog.d/`.
 
+## 2.12.0 (2026-11-17)
+
+### Added
+- Expand or collapse every group at once in the Songs list and the Wishlist: a toolbar button, the group headers' right-click menu, and (in Songs) the column headers' menu.
+- Phone: Now playing's controls can expand over the whole page, bigger and without the visualizer, as a remote (the up chevron by the time; the down one shrinks them back). Following another device starts with them expanded.
+- Smart playlists and rulesets: a number or date rule can compare with another of the song's fields instead of a value, like skips greater than plays, or last skipped after last played.
+- Songs search: filters compare two fields the same way, like `skips:>plays` or `skipped:>played`.
+- Smart playlist and ruleset editor: a few of your songs show under the rules, two that match and one that doesn't, with each rule's values for them and whether they pass. They change every few seconds.
+
+### Changed
+- Phone: album, artist and playlist grids show a small play button in each cover's corner instead of dimming every cover under a big one, and list rows no longer show one (tap the row to open it).
+- Choose art is a dialog now instead of a window you could drag around. Clicking a cover selects it, the one in use is marked "In use", and Use this applies your pick (Cancel leaves the art as it was).
+- Phone: following another device keeps Now playing's big controls (they drive that device's playing) instead of the small desktop bar.
+- Phone: Now playing's star, tag, song info, art and Devices buttons sit in a row of their own under the transport, all the same size.
+- Phone: Songs rows show the song's art, and under the name its artist and album (the first two columns) while the list is sorted by name.
+- Smart playlist and ruleset editor: how many songs the rules come to is worked out in the background, so typing a rule doesn't stall on a big library.
+
+### Fixed
+- Linux: Restart now after an update starts the new version again.
+- Preferences > Integrations: the stream URL's Make button has a row of its own, instead of being squeezed one letter wide on a phone.
+- Phone: the empty Lyrics, Playlists and Soundfonts pages no longer suggest things a phone can't do (a file beside the song, dragging from Songs, a + button).
+- Songs removed from all your devices no longer come back when a device that was offline syncs again.
+- Songs removed from all your devices stay removed when a program (such as a downloader on your hub) sends them in again. Importing one yourself still brings it back everywhere.
+- Android: the log no longer warns that the UI is stuck while the app plays in the background.
+
 ## 2.11.0 (2026-11-12)
 
 ### Changed
