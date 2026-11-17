@@ -182,6 +182,21 @@ impl App {
             }
         };
         let patterns = self.config.title_patterns.as_deref();
+        // On a touch screen, each row shows its song's art (its album's,
+        // or its initials on a color while there's none).
+        let art = &mut self.groupings.art;
+        if touch {
+            art.frame(ui.ctx(), online);
+            art.letters = self.config.tile_letters.unwrap_or(crate::album_art::DEFAULT_LETTERS);
+        }
+        let mut art_ui = |ui: &mut egui::Ui, path: &Path| {
+            let song = store.get(path);
+            let album = song.map(crate::fields::Facts::of).and_then(|f| f.text(crate::fields::Field::Album).map(|t| t.into_owned()));
+            let name = album.unwrap_or_else(|| path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+            let size = (ui.available_height() - 8.0).max(16.0);
+            let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(size), egui::Sense::hover());
+            art.tile(ui, rect, &crate::album_art::Source::of_song(Some(path.to_path_buf()), song), &name);
+        };
         let output = self.song_list.ui(
             ui,
             &mut Listed { store, wishes: &wishes.wishes, only: only.as_ref(), patterns, cache: &cache },
@@ -191,6 +206,7 @@ impl App {
             self.config.sort_with_articles,
             &mut tools,
             &mut |ui, path| song_info_widgets(ui, &mut cache.borrow_mut(), path, false),
+            &mut art_ui,
             &mut menu,
         );
         if output.view_changed {

@@ -477,8 +477,8 @@ fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
 /// A song's row, after its drag and menu: its star, its name (with its
 /// tags, `marks`' widgets, and whether it plays together with others),
 /// and the `shown` columns' values (`song.values`, in their order, at
-/// their widths) to the row's end; on a touch screen, the name over the
-/// first column's value.
+/// their widths) to the row's end; on a touch screen, `art` (if given)
+/// after the star, and the name over the columns' values.
 /// Whether its star was clicked.
 #[allow(clippy::too_many_arguments)]
 fn song_row(
@@ -490,8 +490,12 @@ fn song_row(
     scroll: bool,
     touch: bool,
     marks: &mut dyn FnMut(&mut egui::Ui, &Path),
+    art: Option<&mut dyn FnMut(&mut egui::Ui, &Path)>,
 ) -> bool {
     let star = select_list::star(ui, song.plays.starred);
+    if touch && let Some(art) = art {
+        art(ui, path);
+    }
     let tags = || song.tags.iter().map(|(name, color)| (name.as_str(), *color));
     let text = highlighted(ui, &song.name, &hits.name, false);
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -505,10 +509,11 @@ fn song_row(
         };
         if touch {
             marked(ui);
-            // The name and the tags, and under them the first column's
-            // value (the one sorted by, in the list).
-            let second = shown.first().and(song.values.first()).cloned().flatten();
-            select_list::two_lines(ui, tags(), text, second.map(|v| v.text), scroll);
+            // The name and the tags, and under them the columns' values
+            // (in the list, the one sorted by).
+            let values: Vec<&str> = shown.iter().zip(&song.values).filter_map(|(_, v)| v.as_ref()).map(|v| v.text.as_str()).filter(|t| !t.is_empty()).collect();
+            let second = (!values.is_empty()).then(|| values.join("  \u{b7}  "));
+            select_list::two_lines(ui, tags(), text, second, scroll);
             return;
         }
         let hits = |i: usize| hits.values.get(i).map_or(&[][..], Vec::as_slice);
@@ -599,7 +604,7 @@ pub fn playing_ui(ui: &mut egui::Ui, list_key: &'static str, song: &(PathBuf, De
     ui.allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
         let songs = std::slice::from_ref(song);
         select_list::show(ui, egui::Id::unique(list_key).with("playing"), songs, &mut Selection::default(), Some(0), |ui, row, (path, song)| {
-            star = song_row(ui, path, song, &Hits::default(), &shown, select_list::scrolls(row, true), touch, &mut |_, _| {});
+            star = song_row(ui, path, song, &Hits::default(), &shown, select_list::scrolls(row, true), touch, &mut |_, _| {}, None);
         });
     });
     star
@@ -675,7 +680,7 @@ pub fn ordered_ui(
         if row.idx >= movable && ui.visuals().override_text_color.is_none() {
             ui.visuals_mut().override_text_color = Some(ui.visuals().weak_text_color());
         }
-        if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, marks) {
+        if song_row(ui, path, song, &hits, &shown, select_list::scrolls(row, false), touch, marks, None) {
             star = Some((path.clone(), !song.plays.starred));
         }
     });
@@ -803,6 +808,7 @@ impl SongList {
         articles: bool,
         tools: &mut dyn FnMut(&mut egui::Ui),
         marks: &mut dyn FnMut(&mut egui::Ui, &Path),
+        art: &mut dyn FnMut(&mut egui::Ui, &Path),
         menu: RowMenu,
     ) -> Output {
         let touch = select_list::touch(ui.ctx());
@@ -867,12 +873,17 @@ impl SongList {
         }
 
         // The columns that fit beside the name, and the one sorted by
-        // (for touch, just that, on the second line).
+        // (for touch, just that, on the second line; sorted by name, the
+        // user's first two columns instead).
         let room = ui.available_width() - MIN_NAME_WIDTH;
         let mut used = 0.0;
         let sorted = column(&view.sort);
         let shown: Vec<(&'static Def, f32)> = if touch {
-            view.widths(ui.ctx(), egui::Id::unique(HEADER), sorted.into_iter().collect())
+            let columns = match sorted {
+                Some(sorted) => vec![sorted],
+                None => view.columns.iter().filter_map(|k| column(k)).take(2).collect(),
+            };
+            view.widths(ui.ctx(), egui::Id::unique(HEADER), columns)
         } else {
             let hidden = sorted.filter(|c| !view.columns.iter().any(|k| k == c.key));
             // (One that isn't a column of the user's goes first, to fit.)
@@ -981,7 +992,7 @@ impl SongList {
             }
             crate::menu::context(&row.response, |ui| menu(ui, &rows()));
             let scroll = select_list::scrolls(row, active == Some(row.idx));
-            if song_row(ui, &entry.path, &entry.song, &entry.hits, &shown, scroll, touch, marks) {
+            if song_row(ui, &entry.path, &entry.song, &entry.hits, &shown, scroll, touch, marks, Some(&mut *art)) {
                 star = Some((entry.path.clone(), !entry.song.plays.starred));
             }
         });
@@ -1459,7 +1470,7 @@ mod tests {
             ..Default::default()
         };
         let mut output = ctx.run_ui(input, |ui| {
-            list.ui(ui, source, revision, &mut view, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {});
+            list.ui(ui, source, revision, &mut view, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {}, &mut |_, _| {});
         });
         output.textures_delta.clear();
     }
@@ -1482,7 +1493,7 @@ mod tests {
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), events, ..Default::default() };
             let mut output = ctx.run_ui(input, |ui| {
                 let mut changed = view.clone();
-                if list.ui(ui, &mut source, 1, &mut changed, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {}).view_changed {
+                if list.ui(ui, &mut source, 1, &mut changed, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {}, &mut |_, _| {}).view_changed {
                     *view = changed;
                 }
             });
@@ -1547,7 +1558,7 @@ mod tests {
         for first in [true, false] {
             let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))), ..Default::default() };
             let mut output = ctx.run_ui(input, |ui| {
-                list.ui(ui, &mut source, 1, &mut view, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {});
+                list.ui(ui, &mut source, 1, &mut view, "", false, &mut |_| {}, &mut |_, _| {}, &mut |_, _| {}, &mut |_, _| {});
             });
             output.textures_delta.clear();
             if first {
