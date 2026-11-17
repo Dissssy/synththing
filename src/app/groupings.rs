@@ -256,8 +256,8 @@ fn row_height(ui: &egui::Ui) -> f32 {
 }
 
 /// A play button in the middle of the art at `cover`, over the art
-/// dimmed, while `shown` (under the pointer, or always on touch): whether
-/// it was clicked. It lights up in the selection's color under the pointer.
+/// dimmed, while `shown` (under the pointer): whether it was clicked. It
+/// lights up in the selection's color under the pointer.
 fn art_play(ui: &egui::Ui, cover: egui::Rect, id: egui::Id, shown: bool) -> bool {
     if !shown {
         return false;
@@ -273,6 +273,35 @@ fn art_play(ui: &egui::Ui, cover: egui::Rect, id: egui::Id, shown: bool) -> bool
     let at = rect.center() + egui::vec2(size * 0.04, 0.0);
     painter.text(at, egui::Align2::CENTER_CENTER, super::icon("play"), egui::FontId::proportional(size * 0.45), egui::Color32::WHITE);
     response.clicked()
+}
+
+/// A play button on touch, where nothing hovers: a notch in the bottom
+/// right corner of the art at `cover`, like the smart badge's, leaving the
+/// art undimmed. Whether it was tapped; it lights up while pressed.
+fn corner_play(ui: &egui::Ui, cover: egui::Rect, id: egui::Id) -> bool {
+    let (notch, corners, size) = corner_notch(cover, false);
+    let response = ui.interact(notch, id, egui::Sense::click());
+    let fill = if response.is_pointer_button_down_on() { ui.visuals().selection.bg_fill } else { egui::Color32::from_black_alpha(150) };
+    let painter = ui.painter();
+    painter.rect_filled(notch, corners, fill);
+    let font = egui::FontId::new(size * 0.5, egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into()));
+    // (The triangle's middle sits left of its box's.)
+    painter.text(notch.center() + egui::vec2(size * 0.03, 0.0), egui::Align2::CENTER_CENTER, super::icon("play"), font, egui::Color32::WHITE);
+    response.clicked()
+}
+
+/// A notch in a bottom corner of the art at `rect` (the left one when
+/// `left`), its inner corner rounded: where, its corners and its size.
+fn corner_notch(rect: egui::Rect, left: bool) -> (egui::Rect, egui::CornerRadius, f32) {
+    let size = (rect.height() * 0.3).clamp(18.0, 44.0);
+    let inner = (size * 0.35) as u8;
+    if left {
+        let notch = egui::Rect::from_min_max(rect.left_bottom() - egui::vec2(0.0, size), rect.left_bottom() + egui::vec2(size, 0.0));
+        (notch, egui::CornerRadius { nw: 0, ne: inner, sw: 4, se: 0 }, size)
+    } else {
+        let notch = egui::Rect::from_min_max(rect.max - egui::vec2(size, size), rect.max);
+        (notch, egui::CornerRadius { nw: inner, ne: 0, sw: 0, se: 4 }, size)
+    }
 }
 
 /// How big a group's (or a playlist's) art is on its page.
@@ -301,7 +330,7 @@ pub(super) fn page_header(ui: &mut egui::Ui, rect: egui::Rect, size: f32, art: &
     let cover = egui::Rect::from_min_size(inner.min, egui::vec2(size, size));
     art.tile(ui, cover, from, name);
     if smart {
-        smart_badge(ui, cover);
+        smart_badge(ui, cover, false);
     }
     let text = egui::Rect::from_min_max(egui::pos2(cover.right() + 12.0, inner.top()), inner.max);
     // (A child of its own: the header's room is `rect`, already taken.)
@@ -325,12 +354,10 @@ pub(super) fn page_buttons(ui: &mut egui::Ui, any: bool) -> Option<PageButton> {
 }
 
 /// A smart playlist's mark on its tile at `rect`: its icon, in the
-/// theme's accent, on a dimmed notch in the bottom right corner (its inner
-/// corner rounded).
-fn smart_badge(ui: &egui::Ui, rect: egui::Rect) {
-    let size = (rect.height() * 0.3).clamp(18.0, 44.0);
-    let notch = egui::Rect::from_min_max(rect.max - egui::vec2(size, size), rect.max);
-    let corners = egui::CornerRadius { nw: (size * 0.35) as u8, ne: 0, sw: 0, se: 4 };
+/// theme's accent, on a dimmed notch in a bottom corner (the left one when
+/// `left`, where a touch tile's play button would cover it).
+fn smart_badge(ui: &egui::Ui, rect: egui::Rect, left: bool) {
+    let (notch, corners, size) = corner_notch(rect, left);
     let painter = ui.painter();
     painter.rect_filled(notch, corners, egui::Color32::from_black_alpha(150));
     let font = egui::FontId::new(size * 0.62, egui::FontFamily::Name(super::fonts::PHOSPHOR_FILL.into()));
@@ -809,10 +836,11 @@ impl App {
         } else {
             HashSet::new()
         };
-        let tile_ui = |ui: &egui::Ui, art: &mut AlbumArt, rect: egui::Rect, from: AlbumArtSource, group: &Group| {
+        // (`corner`: the tile has a play button in its corner.)
+        let tile_ui = |ui: &egui::Ui, art: &mut AlbumArt, rect: egui::Rect, from: AlbumArtSource, group: &Group, corner: bool| {
             art.tile(ui, rect, &from, &group.title);
             if smart.contains(&group.key) {
-                smart_badge(ui, rect);
+                smart_badge(ui, rect, corner);
             }
             if wished(group).is_some() {
                 wished_veil(ui, rect);
@@ -844,8 +872,9 @@ impl App {
                 ui.add_space(6.0);
                 let (tile, _) = ui.allocate_exact_size(egui::vec2(44.0, 44.0), egui::Sense::hover());
                 let from = self.art_from(id, albums, group);
-                tile_ui(ui, &mut self.groupings.art, tile, from, group);
-                if wished(group).is_none() && art_play(ui, tile, row.response.id.with("play"), touch || row.response.contains_pointer()) {
+                tile_ui(ui, &mut self.groupings.art, tile, from, group, false);
+                // (On touch, too small for a button: tapping the row opens it.)
+                if !touch && wished(group).is_none() && art_play(ui, tile, row.response.id.with("play"), row.response.contains_pointer()) {
                     play = Some(i);
                 }
                 ui.add_space(8.0);
@@ -900,11 +929,13 @@ impl App {
                         let response = ui.interact(rect, ui.scope_id().with(("group_tile", &group.key)), egui::Sense::click());
                         let cover = egui::Rect::from_min_size(rect.min, egui::vec2(tile, tile));
                         let from = self.art_from(id, albums, group);
-                        tile_ui(ui, &mut self.groupings.art, cover, from, group);
+                        let playable = wished(group).is_none();
+                        tile_ui(ui, &mut self.groupings.art, cover, from, group, phone && playable);
                         if response.contains_pointer() {
                             ui.painter().rect_stroke(cover, 4.0, ui.visuals().widgets.hovered.fg_stroke, egui::StrokeKind::Inside);
                         }
-                        if wished(group).is_none() && art_play(ui, cover, response.id.with("play"), phone || response.contains_pointer()) {
+                        let play_id = response.id.with("play");
+                        if playable && if phone { corner_play(ui, cover, play_id) } else { art_play(ui, cover, play_id, response.contains_pointer()) } {
                             play = Some(i);
                         }
                         let text = egui::Rect::from_min_max(egui::pos2(rect.left(), cover.bottom() + 2.0), rect.max);
