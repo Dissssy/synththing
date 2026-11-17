@@ -483,6 +483,22 @@ pub(super) fn follow_button_ui(ui: &mut egui::Ui, key: &'static str) {
     }
 }
 
+/// The toolbar toggle for a list's groups: closes every one when any is
+/// open (`any_open`), else opens them all. Says which was clicked:
+/// `Some(true)` to close them all, `Some(false)` to open them all.
+pub(crate) fn fold_all_button(ui: &mut egui::Ui, any_open: bool) -> Option<bool> {
+    let (name, hover) = if any_open { ("arrows-in-line-vertical", "Collapse all groups") } else { ("arrows-out-line-vertical", "Expand all groups") };
+    ui.add(icon_button(name)).on_hover_text(hover).clicked().then_some(any_open)
+}
+
+/// The menu entries for a list's groups, as [`fold_all_button`] says.
+pub(crate) fn fold_all_menu(ui: &mut egui::Ui) -> Option<bool> {
+    if ui.button("Expand all groups").clicked() {
+        return Some(false);
+    }
+    ui.button("Collapse all groups").clicked().then_some(true)
+}
+
 /// A button for something that can't be taken back (`button`, with
 /// `hover`): its first click turns it into a red `confirm` ("Really
 /// delete?"), and only a click on that says yes. A click anywhere else,

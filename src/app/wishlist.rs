@@ -149,6 +149,8 @@ enum Row {
 /// What's asked of the list's rows.
 enum Act {
     Toggle(State),
+    /// Close every part (`true`), or open them all.
+    FoldAll(bool),
     Play(String),
     Note(String),
     Open(Page),
@@ -592,7 +594,18 @@ impl App {
             ui.weak("Nothing wished for yet. Search MusicBrainz above, or add something by name with +.");
             return self.wishlist_act(ui.ctx(), act);
         }
+        // (An artist's albums go under them, not in a part of their own.)
+        let on_top = |wish: &Wish| wish.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist));
+        // (An artist's shown for any of their albums kept.)
+        let shown = |id: &String| kept.contains(id) || self.wishlist.list.under(id).any(|(album, _)| kept.contains(album));
+        // (The parts listed.)
+        let parts: BTreeSet<State> = wishes.iter().filter(|(id, w)| on_top(w) && shown(id)).map(|(id, _)| state_of(id)).collect();
         ui.horizontal(|ui| {
+            if !parts.is_empty()
+                && let Some(fold) = super::fold_all_button(ui, parts.iter().any(|p| !self.wishlist.folded.contains(p)))
+            {
+                act = Some(Act::FoldAll(fold));
+            }
             ui.weak(match (wishes.len(), kept.len()) {
                 (all, kept) if kept < all => format!("{kept} of {all}"),
                 (1, _) => "1 wish".to_string(),
@@ -607,10 +620,6 @@ impl App {
             });
         });
 
-        // (An artist's albums go under them, not in a part of their own.)
-        let on_top = |wish: &Wish| wish.under.as_ref().is_none_or(|artist| !wishes.contains_key(artist));
-        // (An artist's shown for any of their albums kept.)
-        let shown = |id: &String| kept.contains(id) || self.wishlist.list.under(id).any(|(album, _)| kept.contains(album));
         let mut rows = Vec::new();
         // (What the Got it heading's clear button takes off: the wishes in that
         // part as filtered, an artist with their albums.)
@@ -647,6 +656,9 @@ impl App {
         let output = select_list::show_grouped(ui, "wishlist", &rows, &mut self.wishlist.selection, None, is_header, |ui, row, item| {
             let id = match item {
                 Row::Heading(state, count) => {
+                    if let Some(fold) = crate::menu::context(&row.response, super::fold_all_menu).and_then(|r| r.inner) {
+                        menu_act = Some(Act::FoldAll(fold));
+                    }
                     let caret = icon(if folded.contains(state) { "caret-right" } else { "caret-down" });
                     ui.label(egui::RichText::new(format!("{caret} {} ({count})", state.name())).strong());
                     if *state == State::Got {
@@ -747,6 +759,10 @@ impl App {
                 if !self.wishlist.folded.remove(&state) {
                     self.wishlist.folded.insert(state);
                 }
+                self.wishlist.selection.clear();
+            }
+            Some(Act::FoldAll(fold)) => {
+                self.wishlist.folded = if fold { State::ALL.into() } else { BTreeSet::new() };
                 self.wishlist.selection.clear();
             }
             Some(Act::Play(id)) => {
