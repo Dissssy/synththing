@@ -24,8 +24,8 @@ const API: &str = "https://ws.audioscrobbler.com/2.0/";
 
 /// SynthThing's API account at Last.fm. The secret signs calls; like
 /// every desktop app's, it ships in the app.
-const API_KEY: &str = "";
-const SECRET: &str = "";
+const API_KEY: &str = "dc0e1fd943fbabe1c1842de232cf6593";
+const SECRET: &str = "1c3925d0e34d8a9f92c14ae7c7d0b591";
 
 /// Where the user approves the app: `?api_key=…&token=…`.
 const APPROVE: &str = "https://www.last.fm/api/auth/";
