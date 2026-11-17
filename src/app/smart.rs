@@ -628,12 +628,10 @@ fn examples_ui(ui: &mut egui::Ui, rules: &Rules, examples: &[Example], names: &[
     };
     ui.weak("For example:");
     for (example, name) in examples.iter().zip(names) {
-        ui.horizontal_wrapped(|ui| {
-            mark(ui, example.matches);
-            ui.label(name).on_hover_text(if example.matches { "Matches the rules" } else { "Doesn't match the rules" });
-            for (rule, check) in rules.rules.iter().zip(&example.checks) {
-                ui.weak("\u{b7}");
-                mark(ui, check.matches);
+        // (One line each: the rules' values on the right, the name cut
+        // short to fit what's left.)
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            for (rule, check) in rules.rules.iter().zip(&example.checks).rev() {
                 let fields = std::iter::once(rule.field).chain(rule.compared_with());
                 let text = match rule.field.kind() {
                     Kind::Tag => tags.get(&rule.value).map_or("a tag", |t| t.name.as_str()).to_string(),
@@ -641,7 +639,13 @@ fn examples_ui(ui: &mut egui::Ui, rules: &Rules, examples: &[Example], names: &[
                     _ => fields.zip(&check.values).map(|(f, v)| format!("{} {v}", f.label())).collect::<Vec<_>>().join(", "),
                 };
                 ui.weak(text);
+                mark(ui, check.matches);
+                ui.weak("\u{b7}");
             }
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                mark(ui, example.matches);
+                ui.add(egui::Label::new(name.as_str()).truncate()).on_hover_text(if example.matches { "Matches the rules" } else { "Doesn't match the rules" });
+            });
         });
     }
 }
