@@ -16,6 +16,9 @@ pub(super) struct LastfmState {
     connecting: Option<Connecting>,
     /// Whether the approval page was opened for the connecting going on.
     opened: bool,
+    /// Just connected here: ask whether to connect the user's other
+    /// devices too.
+    ask_others: bool,
     /// The song playing, as it counts on Last.fm.
     pub(super) heard: Heard,
     /// The song load (`EngineView::loads`) it was last told is playing,
@@ -88,12 +91,67 @@ impl App {
                 self.lastfm_connect_ui(ui);
             }
         });
+        if self.config.lastfm.account.is_none() {
+            self.lastfm.ask_others = false;
+        }
         if self.config.lastfm != before {
             if before.account.is_some() && self.config.lastfm.account.is_none() {
                 self.lastfm.worker = None;
                 crate::lastfm::forget_waiting();
             }
             self.save_config();
+        }
+    }
+
+    /// Connect `account` here, sending to it.
+    fn lastfm_use(&mut self, account: crate::lastfm::Account) {
+        self.config.lastfm.account = Some(account);
+        self.config.lastfm.now_playing = true;
+        self.config.lastfm.history = true;
+    }
+
+    /// Another of the user's devices sent its account (`lastfm::TOPIC`):
+    /// connect it here too, unless one already is.
+    pub(super) fn lastfm_heard(&mut self, ctx: &egui::Context, from: crate::device::Device, body: serde_json::Value) {
+        let Ok(account) = serde_json::from_value::<crate::lastfm::Account>(body) else { return };
+        if self.config.lastfm.account.is_some() {
+            return;
+        }
+        let name = account.name.clone();
+        self.lastfm_use(account);
+        self.save_config();
+        super::toast::show(ctx, format!("Last.fm connected as {name}, from {}", from.name));
+    }
+
+    /// The "connect my other devices" row: a question just after
+    /// connecting, else a plain button.
+    fn lastfm_others_ui(&mut self, ui: &mut egui::Ui) {
+        if self.live_route().is_none() {
+            return;
+        }
+        let Some(account) = self.config.lastfm.account.clone() else { return };
+        let info = "Sends this connection, encrypted, to your other devices that are online now. It isn't stored anywhere; a device that's offline can connect later from here, or by itself.";
+        let mut send = false;
+        if self.lastfm.ask_others {
+            setting_row(ui, |ui| ui.label("Also connect your other devices?"));
+            setting_row(ui, |ui| {
+                send = ui.button("Connect them").on_hover_text(info).clicked();
+                if ui.button("Not now").clicked() {
+                    self.lastfm.ask_others = false;
+                }
+            });
+        } else {
+            with_info(ui, info, |ui| {
+                let button = ui.button("Connect my other devices");
+                send = button.clicked();
+                button
+            });
+        }
+        if send {
+            self.lastfm.ask_others = false;
+            let body = serde_json::to_value(&account).unwrap_or_default();
+            self.send_live(None, crate::lastfm::TOPIC, body);
+            super::toast::show(ui.ctx(), "Sent to your devices that are online");
         }
     }
 
@@ -111,6 +169,8 @@ impl App {
         if settings.account.is_none() {
             return;
         }
+        self.lastfm_others_ui(ui);
+        let settings = &mut self.config.lastfm;
         with_info(ui, "While a song plays on this device, your Last.fm profile shows it.", |ui| ui.checkbox(&mut settings.now_playing, "Show what's playing on Last.fm"));
         with_info(
             ui,
@@ -184,9 +244,8 @@ impl App {
             }
             Connect::Done(Ok(account)) => {
                 self.lastfm.connecting = None;
-                self.config.lastfm.account = Some(account);
-                self.config.lastfm.now_playing = true;
-                self.config.lastfm.history = true;
+                self.lastfm_use(account);
+                self.lastfm.ask_others = self.live_route().is_some();
             }
             Connect::Done(Err(e)) => {
                 setting_row(ui, |ui| ui.colored_label(ui.visuals().error_fg_color, format!("Couldn't connect: {e}")));

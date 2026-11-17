@@ -27,6 +27,11 @@ const API: &str = "https://ws.audioscrobbler.com/2.0/";
 const API_KEY: &str = "dc0e1fd943fbabe1c1842de232cf6593";
 const SECRET: &str = "1c3925d0e34d8a9f92c14ae7c7d0b591";
 
+/// The live message (`device_messages.rs`) that hands an `Account` to the
+/// user's other devices, when they ask to connect those too. Sealed with
+/// the sync key like every live message, and never stored.
+pub const TOPIC: &str = "lastfm";
+
 /// Where the user approves the app: `?api_key=…&token=…`.
 const APPROVE: &str = "https://www.last.fm/api/auth/";
 

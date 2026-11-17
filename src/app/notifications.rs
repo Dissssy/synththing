@@ -263,7 +263,7 @@ impl App {
                 // (Those come from the hub while it's listened to.)
                 Event::Live(sealed) => {
                     if !self.live_from_hub() {
-                        self.live_heard(&sealed);
+                        self.live_heard(ctx, &sealed);
                     }
                 }
             }
