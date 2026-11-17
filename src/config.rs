@@ -102,6 +102,10 @@ pub struct Config {
     /// allowed in. Kept on this device.
     #[serde(default)]
     pub api: crate::api::Settings,
+    /// Last.fm (`lastfm.rs`): the account connected, and what's sent to
+    /// it. Kept on this device.
+    #[serde(default)]
+    pub lastfm: crate::lastfm::Settings,
     /// Preference: which of the last session's settings to start with.
     #[serde(default)]
     pub remember: Remember,

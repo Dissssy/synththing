@@ -63,6 +63,7 @@ const LOCAL: &[&str] = &[
     "sync_debug",
     "local_keymap",
     "api",
+    "lastfm",
 ];
 
 /// A setting a device can choose not to sync: one or more leaves.

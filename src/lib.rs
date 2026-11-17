@@ -60,6 +60,7 @@ mod import;
 #[cfg(windows)]
 mod install;
 mod instance;
+mod lastfm;
 mod latest;
 mod layout;
 mod library;
