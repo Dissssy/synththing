@@ -36,7 +36,7 @@ impl App {
 
     /// Where live messages go now, while this device syncs: the hub, while
     /// it listens to it, else the server.
-    fn live_route(&self) -> Option<Route> {
+    pub(super) fn live_route(&self) -> Option<Route> {
         if !self.sync_on() || !crate::build_info::online(crate::build_info::Online::Scripts) {
             return None;
         }
@@ -63,7 +63,7 @@ impl App {
         while let Ok(event) = self.live.from_hub.1.try_recv() {
             match event {
                 StreamEvent::Opened => self.live_opened(),
-                StreamEvent::Live(sealed) => self.live_heard(&sealed),
+                StreamEvent::Live(sealed) => self.live_heard(ctx, &sealed),
                 StreamEvent::Notification(_) | StreamEvent::Sync(_) | StreamEvent::Preview(_) => {}
             }
         }
@@ -83,13 +83,14 @@ impl App {
     }
 
     /// A live message came, sealed.
-    pub(super) fn live_heard(&mut self, sealed: &str) {
+    pub(super) fn live_heard(&mut self, ctx: &egui::Context, sealed: &str) {
         let Some(sync_key) = identity::sync_key() else { return };
         let me = self.this_device().id;
         let Some(envelope) = device_messages::open(&sync_key, &me, sealed) else { return };
         match envelope.topic.as_str() {
             panel_share::TOPIC => self.panels_heard(envelope.from, envelope.body),
             playback_share::TOPIC => self.devices_heard(envelope.from, envelope.body),
+            crate::lastfm::TOPIC => self.lastfm_heard(ctx, envelope.from, envelope.body),
             _ => {}
         }
     }
