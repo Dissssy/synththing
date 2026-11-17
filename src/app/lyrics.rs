@@ -98,6 +98,8 @@ impl App {
                 (None, _) => "Nothing playing\nPlay a song to see its lyrics here",
                 (Some(_), false) => "",
                 (Some(_), true) if lines.is_some() => "No lyrics",
+                // (A phone has no folder to put a file in.)
+                (Some(_), true) if self.mobile() => "No lyrics for this song",
                 (Some(_), true) => "No lyrics for this song\nPut an .lrc file of the same name beside it, or add lyrics to its tags",
             };
             placeholder(ui, text);

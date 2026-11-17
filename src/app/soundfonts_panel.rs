@@ -34,7 +34,8 @@ impl App {
         let touch = select_list::touch(ui.ctx());
         // The header, as the Queue's (Name, then the size at the right).
         let size_width = if self.config.soundfonts.is_empty() {
-            placeholder(ui, "No soundfonts yet.\nAdd one with + to play MIDI songs.");
+            let how = if self.mobile() { "Import one to play MIDI songs." } else { "Add one with + to play MIDI songs." };
+            placeholder(ui, &format!("No soundfonts yet.\n{how}"));
             0.0
         } else if touch {
             0.0

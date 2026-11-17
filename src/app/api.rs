@@ -1057,55 +1057,58 @@ fn stream_url_ui(ui: &mut egui::Ui, settings: &mut api::Settings, stream: &mut S
             });
             let combo = combo.response.on_hover_text("Pixel scale, like the Visualizer's");
             let tick = ui.checkbox(&mut stream.audio, "With audio");
-            let editing = stream.editing.as_ref().map(|(name, _, _)| name.clone());
-            let make = match &editing {
-                Some(name) => ui.button(format!("{}  Update", super::icon("link"))).on_hover_text(format!("Change {name}'s URL")),
-                None => ui.button(format!("{}  Make", super::icon("link"))),
-            };
-            if make.clicked() {
-                let (name, token, rest) = match stream.editing.take() {
-                    Some(editing) => editing,
-                    None => {
-                        let name = (1..)
-                            .map(|n| if n == 1 { "OBS stream".to_string() } else { format!("OBS stream {n}") })
-                            .find(|name| !settings.apps.iter().any(|app| &app.name == name))
-                            .unwrap_or_default();
-                        let (access, token) = Access::new(&name);
-                        settings.apps.push(access);
-                        (name, token, Vec::new())
-                    }
-                };
-                let hash = crate::library::sha256_hex(token.as_bytes());
-                match settings.apps.iter_mut().find(|app| app.token == hash) {
-                    Some(app) => {
-                        app.listen = stream.audio;
-                        let mut url = format!("http://127.0.0.1:{}/v1/visualizer?token={token}", settings.port());
-                        for part in &rest {
-                            url += &format!("&{part}");
-                        }
-                        for (name, side) in [("width", stream.width), ("height", stream.height)] {
-                            if let Some(side) = side {
-                                url += &format!("&{name}={side}");
-                            }
-                        }
-                        if stream.scale != 1 {
-                            url += &format!("&scale={}", stream.scale);
-                        }
-                        if stream.audio {
-                            url += "&audio=1";
-                        }
-                        *made = Some((format!("{name}'s URL, for a Browser Source in OBS."), url));
-                        stream.problem = None;
-                    }
-                    None => stream.problem = Some(format!("{name} was removed, so its URL can't change.")),
-                }
-            }
-            if editing.is_some() && ui.button("New").on_hover_text("Make a new URL instead").clicked() {
-                stream.editing = None;
-            }
-            label | combo | tick | make
+            label | combo | tick
         },
     );
+    // (Its own row: beside the rest, it's squeezed to nothing on a phone.)
+    setting_row(ui, |ui| {
+        let editing = stream.editing.as_ref().map(|(name, _, _)| name.clone());
+        let make = match &editing {
+            Some(name) => ui.button(format!("{}  Update", super::icon("link"))).on_hover_text(format!("Change {name}'s URL")),
+            None => ui.button(format!("{}  Make", super::icon("link"))),
+        };
+        if make.clicked() {
+            let (name, token, rest) = match stream.editing.take() {
+                Some(editing) => editing,
+                None => {
+                    let name = (1..)
+                        .map(|n| if n == 1 { "OBS stream".to_string() } else { format!("OBS stream {n}") })
+                        .find(|name| !settings.apps.iter().any(|app| &app.name == name))
+                        .unwrap_or_default();
+                    let (access, token) = Access::new(&name);
+                    settings.apps.push(access);
+                    (name, token, Vec::new())
+                }
+            };
+            let hash = crate::library::sha256_hex(token.as_bytes());
+            match settings.apps.iter_mut().find(|app| app.token == hash) {
+                Some(app) => {
+                    app.listen = stream.audio;
+                    let mut url = format!("http://127.0.0.1:{}/v1/visualizer?token={token}", settings.port());
+                    for part in &rest {
+                        url += &format!("&{part}");
+                    }
+                    for (name, side) in [("width", stream.width), ("height", stream.height)] {
+                        if let Some(side) = side {
+                            url += &format!("&{name}={side}");
+                        }
+                    }
+                    if stream.scale != 1 {
+                        url += &format!("&scale={}", stream.scale);
+                    }
+                    if stream.audio {
+                        url += "&audio=1";
+                    }
+                    *made = Some((format!("{name}'s URL, for a Browser Source in OBS."), url));
+                    stream.problem = None;
+                }
+                None => stream.problem = Some(format!("{name} was removed, so its URL can't change.")),
+            }
+        }
+        if editing.is_some() && ui.button("New").on_hover_text("Make a new URL instead").clicked() {
+            stream.editing = None;
+        }
+    });
     with_info(
         ui,
         "Untick a side to use the Browser Source's own: resize the source and refresh, and the visualizer follows. \

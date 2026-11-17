@@ -760,7 +760,13 @@ impl App {
         let view = self.groupings.view();
         view.list = Some(list);
         if groups.is_empty() {
-            super::placeholder(ui, if id == PLAYLISTS { "No playlists yet.\nMake one with +, or drag songs here from Songs." } else { "Nothing here yet.\nThese come from your songs' tags." });
+            // (A phone shows one page at a time: nothing to drag from.)
+            let text = match id == PLAYLISTS {
+                true if self.mobile() => "No playlists yet.\nMake one with +.",
+                true => "No playlists yet.\nMake one with +, or drag songs here from Songs.",
+                false => "Nothing here yet.\nThese come from your songs' tags.",
+            };
+            super::placeholder(ui, text);
             return None;
         }
 
