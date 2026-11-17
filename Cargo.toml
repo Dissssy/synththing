@@ -31,6 +31,7 @@ ureq = { version = "3.4", features = ["json"] }            # HTTPS for update ch
 semver = "1.0"                                            # comparing release versions
 self-replace = "1.5"                                      # swapping the running exe on update
 sha2 = "0.11"                                             # verifying downloaded updates
+md-5 = "0.11"                                             # signing Last.fm calls (lastfm.rs)
 unicode-normalization = "0.1"                             # NFKC for grouping names (fields::group_key)
 regex = "1.13"                                             # guessing tags from file names and video titles (file_tags.rs)
 lrc = "0.2"                                                # reading LRC (timed lyrics) files and tags (lyrics.rs)

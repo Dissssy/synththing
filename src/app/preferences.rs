@@ -44,7 +44,7 @@ impl PrefTab {
     pub(super) fn available() -> Vec<PrefTab> {
         Self::ALL
             .into_iter()
-            .filter(|tab| !(cfg!(target_os = "android") && matches!(tab, Self::Keyboard | Self::Integrations)))
+            .filter(|tab| !(cfg!(target_os = "android") && matches!(tab, Self::Keyboard)))
             .collect()
     }
 
@@ -85,7 +85,7 @@ impl PrefTab {
             Self::Visualizer => "Pixel scale, channel toggles, scripts, recording",
             Self::Account => "Identity, your devices, sync, the Online Library",
             Self::Keyboard => "Keyboard shortcuts",
-            Self::Integrations => "Media controls, letting other programs control synththing",
+            Self::Integrations => if cfg!(target_os = "android") { "Last.fm" } else { "Media controls, Discord, Last.fm, letting other programs control synththing" },
             Self::App => "The window, updates, getting started",
         }
     }
@@ -803,7 +803,13 @@ impl App {
             }
             PrefTab::Account => self.library_preferences_ui(ui),
             PrefTab::Keyboard => self.keyboard_preferences_ui(ui),
-            PrefTab::Integrations => self.api_preferences_ui(ui),
+            PrefTab::Integrations => {
+                self.lastfm_preferences_ui(ui);
+                // (The rest is this computer's: none of it works on a phone.)
+                if !cfg!(target_os = "android") {
+                    self.api_preferences_ui(ui);
+                }
+            }
             PrefTab::App => {
                 if !cfg!(target_os = "android") {
                     settings_group("Window").icon("app-window").show(ui, |ui| {

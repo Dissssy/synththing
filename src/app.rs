@@ -33,6 +33,7 @@ mod desktop_entry;
 #[cfg(windows)]
 mod install;
 mod keyboard;
+mod lastfm;
 mod pairing;
 mod sync;
 mod tags;
@@ -498,6 +499,9 @@ pub struct App {
     /// The current song as it's listened to, for its plays and skips
     /// (`plays.rs`).
     listening: crate::play_stats::Listening,
+    /// Last.fm: the thread sending to it, and the song as it counts there
+    /// (`app/lastfm.rs`).
+    lastfm: lastfm::LastfmState,
     /// The engine's generation (`EngineView::generation`) the current song
     /// last got to its stop time in, so it's acted on once.
     stopped_in: Option<u64>,
@@ -820,6 +824,7 @@ impl App {
             song_loads: 0,
             playing_at: None,
             listening: Default::default(),
+            lastfm: Default::default(),
             stopped_in: None,
             trim_in_view: None,
             seek_on_load: None,

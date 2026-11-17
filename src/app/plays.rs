@@ -13,6 +13,7 @@ impl App {
     pub(super) fn listening_to(&mut self, path: &Path) {
         let heard = self.listening.start(self.songs.key(path), &self.config.play_counts);
         self.count(heard);
+        self.lastfm.heard.start();
     }
 
     /// Keep up with the playing song: played, maybe.
@@ -23,6 +24,7 @@ impl App {
         }
         let heard = self.listening.at(view.position, view.length, view.finished, &self.config.play_counts);
         self.count(heard);
+        self.lastfm_tick(view);
     }
 
     fn count(&mut self, heard: Option<Heard>) {
