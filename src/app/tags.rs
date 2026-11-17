@@ -199,6 +199,15 @@ pub(super) fn quick_toggle_button(ui: &mut egui::Ui, store: &SongStore, toggle: 
 }
 
 impl App {
+    /// The song playing's toggle for the tag `id` (`STARRED`: its star),
+    /// for the media session's buttons: None with no song in the library
+    /// playing, or for a deleted tag.
+    #[cfg(target_os = "android")]
+    pub(super) fn quick_toggle(&self, id: &str) -> Option<QuickToggle> {
+        self.current_song.as_deref().and_then(|p| self.songs.get(p))?;
+        self.tag_toggle(id)
+    }
+
     /// The toggle for the tag `id` (`STARRED`: the star), on when the song
     /// playing has it (off with none playing): None for a deleted tag.
     pub(super) fn tag_toggle(&self, id: &str) -> Option<QuickToggle> {
