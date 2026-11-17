@@ -14,7 +14,7 @@ use crate::playlist::{self, Playlist, PlaylistEntry};
 use crate::select_list;
 use crate::settings_sync;
 use crate::fields::{self, Field, Kind};
-use crate::smart::{self, Group, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
+use crate::smart::{self, Example, Group, Limit, Op, Order, Rule, Rules, Ruleset, Split, SplitBy, Unit};
 use crate::latest::Latest;
 use crate::song_store::{SongStore, Tag};
 use crate::wishlist::Wishes;
@@ -41,14 +41,28 @@ pub(super) enum Editing {
     Ruleset(Option<String>),
 }
 
+/// How many example songs the rules editor shows that match, and that
+/// don't, and for how long before showing others.
+const EXAMPLES_MATCHING: usize = 2;
+const EXAMPLES_OTHERS: usize = 1;
+const EXAMPLES_SECS: f64 = 4.0;
+
 /// The rules editor: what it's editing, the name and rules as edited so
-/// far, and what they come to (worked out again when they change).
+/// far, and what they come to (worked out again, on a thread of its own,
+/// when they change).
 pub(super) struct RulesEditor {
     editing: Editing,
     name: String,
     rules: Rules,
     read_only: bool,
-    preview: Option<(u64, Rules, String)>,
+    worker: Latest<(), (u64, GroupsJob), Preview>,
+    /// What the preview was last asked for from (`App::groups_revision`,
+    /// and the rules).
+    asked: Option<(u64, Rules)>,
+    preview: Option<Preview>,
+    /// The example songs shown, and which round of them
+    /// (`EXAMPLES_SECS`).
+    examples: Option<(u64, Vec<Example>)>,
     /// What of the search it was made from couldn't be a rule.
     left_out: Vec<String>,
 }
@@ -132,7 +146,17 @@ impl App {
 
     fn open_rules_editor(&mut self, ctx: &egui::Context, editing: Editing, name: String, rules: Rules, builtin: bool) {
         let read_only = builtin || !rules_editable(ctx);
-        self.rules_editor = Some(RulesEditor { editing, name, rules, read_only, preview: None, left_out: Vec::new() });
+        self.rules_editor = Some(RulesEditor {
+            editing,
+            name,
+            rules,
+            read_only,
+            worker: Latest::new("rules-preview", make_preview),
+            asked: None,
+            preview: None,
+            examples: None,
+            left_out: Vec::new(),
+        });
     }
 
     /// Open a new smart playlist's rules made from the Songs search
@@ -161,9 +185,40 @@ impl App {
     pub(super) fn rules_editor_ui(&mut self, ctx: &egui::Context) {
         let revision = self.groups_revision();
         let Some(editor) = &mut self.rules_editor else { return };
-        if editor.preview.as_ref().is_none_or(|(seen, rules, _)| *seen != revision || *rules != editor.rules) {
-            editor.preview = Some((revision, editor.rules.clone(), summary(&editor.rules, &self.songs, &self.wishlist.list.wishes, &self.config.group_ignore, self.config.sort_with_articles)));
+        if let Some((_, preview)) = editor.worker.take().last() {
+            editor.preview = Some(preview);
+            editor.examples = None;
         }
+        if editor.asked.as_ref().is_none_or(|(seen, rules)| *seen != revision || *rules != editor.rules) {
+            let job = GroupsJob {
+                rules: editor.rules.clone(),
+                store: self.songs.clone(),
+                wishes: self.wishlist.list.wishes.clone(),
+                now: settings_sync::now(),
+                ignore: self.config.group_ignore.clone(),
+                articles: self.config.sort_with_articles,
+            };
+            editor.worker.ask((), (revision, job), ctx);
+            editor.asked = Some((revision, editor.rules.clone()));
+        }
+        let round = (ctx.input(|i| i.time) / EXAMPLES_SECS) as u64;
+        if let Some(preview) = &editor.preview
+            && editor.examples.as_ref().is_none_or(|(seen, _)| *seen != round)
+        {
+            let mut keys = sample(&preview.matching, EXAMPLES_MATCHING, round);
+            keys.extend(sample(&preview.others, EXAMPLES_OTHERS, round));
+            let examples = preview.rules.check(&self.songs, &self.wishlist.list.wishes, settings_sync::now(), &keys);
+            editor.examples = Some((round, examples));
+        }
+        let now = ctx.input(|i| i.time);
+        ctx.request_repaint_after(std::time::Duration::from_secs_f64(EXAMPLES_SECS - now % EXAMPLES_SECS));
+        let naming = super::naming(&self.config, &self.songs);
+        let names: Vec<String> = editor
+            .examples
+            .iter()
+            .flat_map(|(_, examples)| examples)
+            .map(|e| super::title_of(&mut self.song_info, &naming, &self.songs.path(&e.key)))
+            .collect();
         let ruleset = matches!(editor.editing, Editing::Ruleset(_));
         let new = matches!(editor.editing, Editing::Playlist(None) | Editing::Ruleset(None));
         let mut done = None;
@@ -193,8 +248,19 @@ impl App {
                 });
             });
             ui.add_space(4.0);
-            if let Some((_, _, summary)) = &editor.preview {
-                ui.weak(summary);
+            if let Some(preview) = &editor.preview {
+                ui.horizontal(|ui| {
+                    ui.weak(&preview.summary);
+                    if editor.asked.as_ref().is_some_and(|(seen, rules)| (*seen, rules) != (preview.revision, &preview.rules)) {
+                        ui.spinner();
+                    }
+                });
+                if let Some((_, examples)) = &editor.examples
+                    && !examples.is_empty()
+                {
+                    ui.add_space(4.0);
+                    examples_ui(ui, &preview.rules, examples, &names, self.songs.tags());
+                }
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -506,15 +572,77 @@ impl RulesetGroups {
 }
 
 /// What `rules` come to in `store` now, in a line.
-fn summary(rules: &Rules, store: &crate::song_store::SongStore, wishes: &crate::wishlist::Wishes, ignore: &str, articles: bool) -> String {
-    let now = settings_sync::now();
-    if rules.split.is_some() {
-        let groups = rules.groups(store, wishes, now, ignore, articles);
+/// What rules come to, for the rules editor: what they were worked out
+/// from (`App::groups_revision`, and the rules), how many songs (and
+/// playlists) they make, and the songs they match and don't (the limit
+/// aside), to show some of.
+struct Preview {
+    revision: u64,
+    rules: Rules,
+    summary: String,
+    matching: Vec<String>,
+    others: Vec<String>,
+}
+
+fn make_preview((revision, job): (u64, GroupsJob)) -> Preview {
+    let GroupsJob { rules, store, wishes, now, ignore, articles } = job;
+    let summary = if rules.split.is_some() {
+        let groups = rules.groups(&store, &wishes, now, &ignore, articles);
         let songs: usize = groups.iter().map(|g| g.songs.len()).sum();
         format!("{} playlist{}, {songs} songs in all", groups.len(), if groups.len() == 1 { "" } else { "s" })
     } else {
-        let songs = rules.songs(store, wishes, now, articles).len();
+        let songs = rules.songs(&store, &wishes, now, articles).len();
         format!("{songs} song{} now", if songs == 1 { "" } else { "s" })
+    };
+    let (matching, others) = rules.sort_out(&store, &wishes, now);
+    Preview { revision, rules, summary, matching, others }
+}
+
+/// Up to `n` of `keys`, a different few each `round`.
+fn sample(keys: &[String], n: usize, round: u64) -> Vec<String> {
+    use std::hash::{DefaultHasher, Hash, Hasher};
+    if keys.len() <= n {
+        return keys.to_vec();
+    }
+    let mut picked: Vec<usize> = Vec::new();
+    for k in 0u64.. {
+        if picked.len() == n {
+            break;
+        }
+        let mut hasher = DefaultHasher::new();
+        (round, k).hash(&mut hasher);
+        let i = (hasher.finish() % keys.len() as u64) as usize;
+        if !picked.contains(&i) {
+            picked.push(i);
+        }
+    }
+    picked.into_iter().map(|i| keys[i].clone()).collect()
+}
+
+/// Example songs (`names`) checked against `rules`: whether each
+/// matches, and each rule's values for it and whether they match.
+fn examples_ui(ui: &mut egui::Ui, rules: &Rules, examples: &[Example], names: &[String], tags: &BTreeMap<String, Tag>) {
+    let mark = |ui: &mut egui::Ui, matches: bool| {
+        let (glyph, color) = if matches { (super::icon("check"), ui.visuals().strong_text_color()) } else { (super::icon("x"), ui.visuals().warn_fg_color) };
+        ui.colored_label(color, glyph);
+    };
+    ui.weak("For example:");
+    for (example, name) in examples.iter().zip(names) {
+        ui.horizontal_wrapped(|ui| {
+            mark(ui, example.matches);
+            ui.label(name).on_hover_text(if example.matches { "Matches the rules" } else { "Doesn't match the rules" });
+            for (rule, check) in rules.rules.iter().zip(&example.checks) {
+                ui.weak("\u{b7}");
+                mark(ui, check.matches);
+                let fields = std::iter::once(rule.field).chain(rule.compared_with());
+                let text = match rule.field.kind() {
+                    Kind::Tag => tags.get(&rule.value).map_or("a tag", |t| t.name.as_str()).to_string(),
+                    _ if check.values.is_empty() => rule.field.label().to_string(),
+                    _ => fields.zip(&check.values).map(|(f, v)| format!("{} {v}", f.label())).collect::<Vec<_>>().join(", "),
+                };
+                ui.weak(text);
+            }
+        });
     }
 }
 
@@ -595,6 +723,20 @@ fn rule_ui(ui: &mut egui::Ui, rule: &mut Rule, tags: &BTreeMap<String, Tag>) {
     pick(ui, "op", &mut rule.op, smart::ops(kind), |o| o.title());
     if rule.op.values() == 0 {
         return;
+    }
+    if rule.op.compares_fields(kind) {
+        let shown = rule.compared_with().map_or("a value", Field::label);
+        egui::ComboBox::from_id_salt("against").selected_text(shown).show_ui(ui, |ui| {
+            ui.selectable_value(&mut rule.against, None, "a value");
+            for field in fields::rule_fields().into_iter().filter(|f| f.kind() == kind) {
+                ui.selectable_value(&mut rule.against, Some(field), field.label());
+            }
+        })
+        .response
+        .on_hover_text("Compare with a value, or with another of the song's fields");
+        if rule.compared_with().is_some() {
+            return;
+        }
     }
     if kind == Kind::Tag {
         let name = tags.get(&rule.value).map_or("(pick a tag)", |t| t.name.as_str());

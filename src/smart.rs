@@ -64,11 +64,21 @@ pub struct Rule {
     /// The range's other end (`Op::InRange`).
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub to: String,
+    /// Another of the song's fields to compare with instead of `value`
+    /// (`compared_with`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub against: Option<Field>,
 }
 
 impl Rule {
     pub fn new(field: Field) -> Self {
-        Self { field, op: ops(field.kind())[0], value: String::new(), to: String::new() }
+        Self { field, op: ops(field.kind())[0], value: String::new(), to: String::new(), against: None }
+    }
+
+    /// The field it compares with, if it compares with one: one of the
+    /// same kind as its own, with an op that can (`Op::compares_fields`).
+    pub fn compared_with(&self) -> Option<Field> {
+        self.against.filter(|other| other.kind() == self.field.kind() && self.op.compares_fields(self.field.kind()))
     }
 }
 
@@ -201,6 +211,16 @@ impl Op {
             Self::HasNot => "doesn't have",
             Self::IsTrue => "is true",
             Self::IsFalse => "is false",
+        }
+    }
+
+    /// Whether it can compare a `kind` field with another field
+    /// (`Rule::against`): numbers by size, dates by which is earlier.
+    pub fn compares_fields(self, kind: Kind) -> bool {
+        match kind {
+            Kind::Number => matches!(self, Self::Is | Self::IsNot | Self::Greater | Self::Less | Self::AtLeast | Self::AtMost),
+            Kind::Date => matches!(self, Self::Before | Self::After | Self::AtLeast | Self::AtMost),
+            _ => false,
         }
     }
 
@@ -434,6 +454,23 @@ fn matched_artists(store: &SongStore) -> BTreeSet<String> {
     artists
 }
 
+/// A song checked against rules (`Rules::check`): whether it matches
+/// them, and each rule.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Example {
+    pub key: String,
+    pub matches: bool,
+    pub checks: Vec<Check>,
+}
+
+/// A song checked against a rule: whether it matches, and the values the
+/// rule looked at as shown (`Test::shown`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Check {
+    pub matches: bool,
+    pub values: Vec<String>,
+}
+
 /// A rule ready to test songs with: its values parsed once.
 struct Test<'a> {
     rule: &'a Rule,
@@ -467,14 +504,48 @@ impl<'a> Test<'a> {
             periods: [period(&rule.value), period(&rule.to)],
             artists: (rule.field == Field::ArtistMatched).then(|| matched_artists(store)),
             wishes: matches!(rule.field, Field::Wished | Field::Wish).then(|| Index::new(wishes)),
-            stats: rule.field.is_play_stat().then(|| Arc::clone(store.stats())),
+            stats: (rule.field.is_play_stat() || rule.compared_with().is_some_and(Field::is_play_stat)).then(|| Arc::clone(store.stats())),
+        }
+    }
+
+    /// What's known of song `key` (`song`), its play stats too if the
+    /// rule looks at them.
+    fn facts<'s>(&'s self, key: &str, song: &'s Song) -> Facts<'s> {
+        Facts { stats: self.stats.as_ref().map(|s| s.totals(key)), ..Facts::of(song) }
+    }
+
+    /// The values the rule looks at in song `key` (`song`), as shown:
+    /// its field's, and the one it compares with. (None for a tag or a
+    /// flag: whether it matches says it.)
+    fn shown(&self, key: &str, song: &Song) -> Vec<String> {
+        let facts = self.facts(key, song);
+        let show = |field: Field| match facts.value(field) {
+            Some(value) if value.text.is_empty() => value.number.map_or_else(|| "nothing".to_string(), |n| format!("{n}")),
+            Some(value) => value.text,
+            None => "nothing".to_string(),
+        };
+        match self.rule.field.kind() {
+            Kind::Tag | Kind::Flag => Vec::new(),
+            _ => std::iter::once(self.rule.field).chain(self.rule.compared_with()).map(show).collect(),
         }
     }
 
     /// Whether song `key` (`song`) matches.
     fn matches(&self, key: &str, song: &Song) -> bool {
         let Rule { field, op, value, .. } = self.rule;
-        let (whole, song) = (song, Facts { stats: self.stats.as_ref().map(|s| s.totals(key)), ..Facts::of(song) });
+        let (whole, song) = (song, self.facts(key, song));
+        if let Some(other) = self.rule.compared_with() {
+            let (Some(h), Some(w)) = (song.number(*field), song.number(other)) else { return false };
+            return match op {
+                Op::Is => (h - w).abs() <= 1e-9,
+                Op::IsNot => (h - w).abs() > 1e-9,
+                Op::Greater | Op::After => h > w,
+                Op::Less | Op::Before => h < w,
+                Op::AtLeast => h >= w - 1e-9,
+                Op::AtMost => h <= w + 1e-9,
+                _ => false,
+            };
+        }
         match field.kind() {
             Kind::Text => {
                 // (Each of a list field's items: a song's genre "is" each
@@ -677,6 +748,32 @@ impl Rules {
         move |key, song| tests.is_empty() || if self.any { tests.iter().any(|t| t.matches(key, song)) } else { tests.iter().all(|t| t.matches(key, song)) }
     }
 
+    /// The songs the rules match, and those they don't (keys, those
+    /// removed here left out), the limit aside.
+    pub fn sort_out(&self, store: &SongStore, wishes: &Wishes, now: i64) -> (Vec<String>, Vec<String>) {
+        let matches = self.matcher(store, wishes, now);
+        let (mut matching, mut others) = (Vec::new(), Vec::new());
+        for (key, song) in store.known().filter(|(key, _)| !store.is_blocked(key)) {
+            let list = if matches(key, song) { &mut matching } else { &mut others };
+            list.push(key.to_string());
+        }
+        (matching, others)
+    }
+
+    /// Songs `keys` checked against each rule, to show why they match or
+    /// don't (those not in `store` left out).
+    pub fn check(&self, store: &SongStore, wishes: &Wishes, now: i64, keys: &[String]) -> Vec<Example> {
+        let tests: Vec<Test> = self.rules.iter().map(|r| Test::new(r, store, wishes, now)).collect();
+        keys.iter()
+            .filter_map(|key| {
+                let song = store.get_by_key(key)?;
+                let checks: Vec<Check> = tests.iter().map(|t| Check { matches: t.matches(key, song), values: t.shown(key, song) }).collect();
+                let matches = checks.is_empty() || if self.any { checks.iter().any(|c| c.matches) } else { checks.iter().all(|c| c.matches) };
+                Some(Example { key: key.clone(), matches, checks })
+            })
+            .collect()
+    }
+
     fn matching<'a>(&self, store: &SongStore, wishes: &Wishes, songs: impl Iterator<Item = (&'a str, &'a Song)>, now: i64) -> Vec<(&'a str, &'a Song)> {
         let matches = self.matcher(store, wishes, now);
         songs.filter(|(key, song)| matches(key, song)).collect()
@@ -877,6 +974,30 @@ mod tests {
     }
 
     #[test]
+    fn rules_compare_two_fields() {
+        let lib = library();
+        let lib = &lib;
+        let compare = |field, op, against| Rules { rules: vec![Rule { against: Some(against), ..Rule { op, ..Rule::new(field) } }], ..Rules::default() };
+        let songs = |rules: &Rules| names(lib, &rules.songs(lib, &Wishes::new(), 0, false));
+        assert_eq!(songs(&compare(Field::Length, Op::Greater, Field::Track)), ["a.ogg", "b.ogg", "c.ogg", "d.ogg"], "a song missing either says nothing");
+        assert_eq!(songs(&compare(Field::Track, Op::Is, Field::Track)), ["a.ogg", "b.ogg", "c.ogg", "d.ogg"]);
+        assert_eq!(songs(&compare(Field::Track, Op::IsNot, Field::Track)), Vec::<String>::new());
+        assert_eq!(songs(&compare(Field::Track, Op::Greater, Field::Length)), Vec::<String>::new());
+        assert_eq!(songs(&compare(Field::Imported, Op::AtLeast, Field::Imported)).len(), 5, "dates compare too");
+        assert_eq!(songs(&compare(Field::Imported, Op::After, Field::Imported)), Vec::<String>::new());
+        assert_eq!(songs(&compare(Field::Track, Op::InRange, Field::Length)), Vec::<String>::new(), "a range takes values");
+        assert_eq!(songs(&compare(Field::Length, Op::Greater, Field::Imported)), Vec::<String>::new(), "a number doesn't compare with a date");
+
+        let rules = Rules { rules: vec![compare(Field::Length, Op::Greater, Field::Track).rules.remove(0), Rule { op: Op::IsTrue, ..Rule::new(Field::Starred) }], ..Rules::default() };
+        let (matching, others) = rules.sort_out(lib, &Wishes::new(), 0);
+        assert_eq!((names(lib, &matching), names(lib, &others).len()), (vec!["a.ogg".to_string(), "d.ogg".to_string()], 3));
+        let checked = rules.check(lib, &Wishes::new(), 0, &[matching[0].clone(), others[0].clone()]);
+        assert!(checked[0].matches);
+        assert_eq!(checked[0].checks, [Check { matches: true, values: vec!["3:20".into(), "2".into()] }, Check { matches: true, values: vec![] }]);
+        assert!(!checked[1].matches);
+    }
+
+    #[test]
     fn matched_at_musicbrainz() {
         use crate::song_store::Online;
         let dir = std::env::temp_dir().join(format!("synththing-smart-matched-{}", std::process::id()));
@@ -896,7 +1017,7 @@ mod tests {
             (format!("{:064x}.ogg", i + 1), Song { name: name.into(), meta: Some(meta), online, ..Song::default() })
         }));
         let found = |field, op| {
-            let rules = Rules { rules: vec![Rule { field, op, value: String::new(), to: String::new() }], ..Rules::default() };
+            let rules = Rules { rules: vec![Rule { field, op, value: String::new(), to: String::new(), against: None }], ..Rules::default() };
             let wishes = Wishes::new();
             let matches = rules.matcher(&store, &wishes, 0);
             let mut names: Vec<String> = store.known().filter(|(k, s)| matches(k, s)).map(|(_, s)| s.name.clone()).collect();
@@ -919,7 +1040,7 @@ mod tests {
         .map(|(id, wish)| (id.to_string(), wish))
         .collect();
         let wished = |field, op, value: &str| {
-            let rules = Rules { rules: vec![Rule { field, op, value: value.into(), to: String::new() }], ..Rules::default() };
+            let rules = Rules { rules: vec![Rule { field, op, value: value.into(), to: String::new(), against: None }], ..Rules::default() };
             let matches = rules.matcher(&store, &wishes, 0);
             let mut names: Vec<String> = store.known().filter(|(k, s)| matches(k, s)).map(|(_, s)| s.name.clone()).collect();
             names.sort();
@@ -937,14 +1058,14 @@ mod tests {
     #[test]
     fn rules_match_all_or_any() {
         let lib = library();
-        let rule = |field, op, value: &str| Rule { field, op, value: value.into(), to: String::new() };
+        let rule = |field, op, value: &str| Rule { field, op, value: value.into(), to: String::new(), against: None };
         let mut rules = Rules { rules: vec![rule(Field::Artist, Op::Is, "NUJABES"), rule(Field::Starred, Op::IsTrue, "")], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, &Wishes::new(), 0, false)), ["a.ogg"]);
         rules.any = true;
         assert_eq!(names(&lib, &rules.songs(&lib, &Wishes::new(), 0, false)), ["a.ogg", "b.ogg", "c.ogg", "d.ogg"]);
         let rules = Rules { rules: vec![rule(Field::Album, Op::IsEmpty, "")], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, &Wishes::new(), 0, false)), ["d.ogg", "e.ogg"]);
-        let rules = Rules { rules: vec![Rule { field: Field::Length, op: Op::InRange, value: "3:00".into(), to: "4:10".into() }], ..Rules::default() };
+        let rules = Rules { rules: vec![Rule { field: Field::Length, op: Op::InRange, value: "3:00".into(), to: "4:10".into(), against: None }], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, &Wishes::new(), 0, false)), ["a.ogg", "c.ogg"]);
         let rules = Rules { rules: vec![rule(Field::Imported, Op::InLast, "1")], ..Rules::default() };
         assert_eq!(names(&lib, &rules.songs(&lib, &Wishes::new(), 86_400 + 300, false)), ["c.ogg", "d.ogg", "e.ogg"]);
@@ -995,7 +1116,7 @@ mod tests {
         stats.skipped(&key(4), "phone", 500);
         lib.set_stats(stats);
         let wishes = Wishes::new();
-        let rule = |field, op, value: &str| Rules { rules: vec![Rule { field, op, value: value.into(), to: String::new() }], ..Rules::default() };
+        let rule = |field, op, value: &str| Rules { rules: vec![Rule { field, op, value: value.into(), to: String::new(), against: None }], ..Rules::default() };
         assert_eq!(names(&lib, &rule(Field::Plays, Op::AtLeast, "3").songs(&lib, &wishes, 0, false)), ["a.ogg", "c.ogg"]);
         assert_eq!(names(&lib, &rule(Field::Plays, Op::Is, "0").songs(&lib, &wishes, 0, false)), ["d.ogg", "e.ogg"], "never played");
         assert_eq!(names(&lib, &rule(Field::Skips, Op::AtLeast, "1").songs(&lib, &wishes, 0, false)), ["d.ogg"]);
@@ -1098,7 +1219,7 @@ mod tests {
         let groups = by_genre.groups(&genres, &Wishes::new(), 0, "", false);
         let found: Vec<(&str, usize)> = groups.iter().map(|g| (g.title.as_str(), g.songs.len())).collect();
         assert_eq!(found, [("Avant-Garde", 1), ("Classical", 1), ("Rock", 2)]);
-        let rock = Rules { rules: vec![Rule { field: Field::Genre, op: Op::Is, value: "rock".into(), to: String::new() }], ..Rules::default() };
+        let rock = Rules { rules: vec![Rule { field: Field::Genre, op: Op::Is, value: "rock".into(), to: String::new(), against: None }], ..Rules::default() };
         assert_eq!(names(&genres, &rock.songs(&genres, &Wishes::new(), 0, false)), ["a.ogg", "b.ogg"]);
     }
 
