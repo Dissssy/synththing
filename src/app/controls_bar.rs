@@ -327,7 +327,7 @@ impl App {
         let no_song = "Nothing to play yet: pick a song";
         match item {
             BarItem::Middle | BarItem::Right => {}
-            BarItem::Devices => self.devices_button_ui(ui, view),
+            BarItem::Devices => self.devices_button_ui(ui, view, None),
             BarItem::Shuffle => {
                 let hover = shuffle_text(self.shuffle);
                 if ui.add(icon_button("shuffle").selected(self.shuffle)).on_hover_text(hover).clicked() {

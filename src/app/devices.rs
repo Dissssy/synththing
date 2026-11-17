@@ -270,22 +270,12 @@ impl App {
     /// In place of the transport while following: the leader's song, its
     /// controls, Leave and the Devices button.
     pub(super) fn following_bar_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        let following = self.devices.following.as_ref().map(|f| f.leader.as_str());
-        let Some(leader) = following.and_then(|id| self.devices.players.get(id)).cloned() else { return };
-        let here = self.can_continue(&leader);
+        let Some(leader) = self.leader() else { return };
         let mut act = None;
         ui.add_space(4.0);
         ui.horizontal(|ui| {
-            ui.label(icon("devices"));
-            ui.weak("Playing on");
-            ui.strong(&leader.device.name);
-            if ui.button("Leave").on_hover_text("Stop following it: this device's own transport comes back").clicked() {
-                act = Some(Act::Leave);
-            }
-            if continue_button(ui, &leader, here, false) {
-                act = Some(Act::Continue);
-            }
-            self.devices_button_ui(ui, view);
+            self.leader_line_ui(ui, &leader, view);
+            self.devices_button_ui(ui, view, None);
         });
         if let Some(control) = song_ui(ui, &leader, &mut self.devices.seeking, Instant::now()) {
             act = Some(Act::Control(control));
@@ -299,24 +289,69 @@ impl App {
         }
     }
 
+    /// The device this one follows, while it follows one that's online.
+    pub(super) fn leader(&self) -> Option<Player> {
+        let following = self.devices.following.as_ref()?;
+        self.devices.players.get(&following.leader).cloned()
+    }
+
+    /// Whom this device follows, with Leave and Continue here.
+    pub(super) fn leader_line_ui(&mut self, ui: &mut egui::Ui, leader: &Player, view: &EngineView) {
+        let here = self.can_continue(leader);
+        let mut act = None;
+        ui.label(icon("devices"));
+        ui.weak("Playing on");
+        ui.strong(&leader.device.name);
+        if ui.button("Leave").on_hover_text("Stop following it: this device's own transport comes back").clicked() {
+            act = Some(Act::Leave);
+        }
+        if continue_button(ui, leader, here, false) {
+            act = Some(Act::Continue);
+        }
+        if let Some(act) = act {
+            self.act(leader.device.id.clone(), act, view);
+        }
+    }
+
+    /// The leader's seek bar, for a transport showing its song (the caller
+    /// sizes it). Where it shows, and the song's length.
+    pub(super) fn leader_seek_ui(&mut self, ui: &mut egui::Ui, leader: &Player, accent: Option<egui::Color32>) -> (f64, f64) {
+        let length = leader.state.song.as_ref().map_or(0.0, |s| s.length);
+        let now = Instant::now();
+        let (mut position, waiting) = held_position(&mut self.devices.seeking, leader, now);
+        let bar = ui.add_enabled_ui(!waiting, |ui| seek_bar_ui(ui, &mut position, 0.0..=length, None, accent)).inner;
+        if let Some(control) = seek_let_go(&mut self.devices.seeking, &leader.device.id, &bar, position, now) {
+            self.send_playback(Some(leader.device.id.clone()), &Message::Control(control));
+        }
+        if waiting || !leader.state.paused {
+            ui.ctx().request_repaint_after(RUN_ON);
+        }
+        (position, length)
+    }
+
     /// The Devices button: what each other device online plays, with its
     /// controls, Join and Bring here, in a popup (greyed out while none is).
-    pub(super) fn devices_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+    /// `size` makes it a big square button (the phone's), else a toolbar's.
+    pub(super) fn devices_button_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, size: Option<f32>) {
         let me = self.this_device().id;
         // (Which devices' songs this one has, to continue here.)
         let here: Vec<bool> = self.devices.players.all().iter().map(|p| self.can_continue(p)).collect();
         let DevicesState { players, seeking, following, .. } = &mut self.devices;
         let following = following.as_ref().map(|f| f.leader.as_str());
         let all = players.all();
+        let button = || match size {
+            Some(size) => super::mobile::big_icon_button("devices", size),
+            None => icon_button("devices"),
+        };
         if all.is_empty() {
-            ui.add_enabled(false, icon_button("devices")).on_disabled_hover_text("Your other devices, when one is online: what they're playing");
+            ui.add_enabled(false, button()).on_disabled_hover_text("Your other devices, when one is online: what they're playing");
             return;
         }
         let hover = match all.len() {
             1 => "Your other device: what it's playing".to_string(),
             n => format!("Your {n} other devices: what they're playing"),
         };
-        let button = ui.add(icon_button("devices")).on_hover_text(hover);
+        let button = ui.add(button()).on_hover_text(hover);
         let mut asked = None;
         egui::Popup::from_toggle_button_response(&button).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
             ui.set_min_width(260.0);
@@ -431,6 +466,34 @@ fn player_ui(
     asked
 }
 
+/// Where `player`'s seek bar shows: where it's held (dragged, or let go
+/// and waiting to hear the device went there), else where the device is.
+/// And whether it's waiting.
+fn held_position(seeking: &mut Option<Seek>, player: &Player, now: Instant) -> (f64, bool) {
+    let id = &player.device.id;
+    // (A seek sent is done once the device is heard from since, or it's
+    // been too long.)
+    if seeking.as_ref().is_some_and(|s| &s.device == id && s.sent.is_some_and(|sent| player.heard() > sent || now >= sent + SEEK_WAIT)) {
+        *seeking = None;
+    }
+    let held = seeking.as_ref().filter(|s| &s.device == id);
+    let waiting = held.is_some_and(|s| s.sent.is_some());
+    (held.map_or_else(|| player.position(now), |s| s.at), waiting)
+}
+
+/// After a device's seek bar: held where it's dragged to, and let go, the
+/// seek to ask of it.
+fn seek_let_go(seeking: &mut Option<Seek>, id: &str, bar: &egui::Response, position: f64, now: Instant) -> Option<Control> {
+    if bar.dragged() {
+        *seeking = Some(Seek { device: id.to_string(), at: position, sent: None });
+    }
+    if bar.drag_stopped() || (bar.changed() && !bar.dragged()) {
+        *seeking = Some(Seek { device: id.to_string(), at: position, sent: Some(now) });
+        return Some(Control::Seek { position });
+    }
+    None
+}
+
 /// A device's song with where it is and its controls, or that it's idle.
 /// What it's asked to do, if anything.
 fn song_ui(ui: &mut egui::Ui, player: &Player, seeking: &mut Option<Seek>, now: Instant) -> Option<Control> {
@@ -446,23 +509,10 @@ fn song_ui(ui: &mut egui::Ui, player: &Player, seeking: &mut Option<Seek>, now: 
     });
     let mut asked = None;
     ui.horizontal(|ui| {
-        // (A seek sent is done once the device is heard from since, or
-        // it's been too long.)
-        if seeking.as_ref().is_some_and(|s| &s.device == id && s.sent.is_some_and(|sent| player.heard() > sent || now >= sent + SEEK_WAIT)) {
-            *seeking = None;
-        }
-        let held = seeking.as_ref().filter(|s| &s.device == id);
-        let waiting = held.is_some_and(|s| s.sent.is_some());
-        let mut position = held.map_or_else(|| player.position(now), |s| s.at);
+        let (mut position, waiting) = held_position(seeking, player, now);
         ui.spacing_mut().slider_width = 160.0;
         let bar = ui.add_enabled_ui(!waiting, |ui| seek_bar_ui(ui, &mut position, 0.0..=song.length, None, None)).inner;
-        if bar.dragged() {
-            *seeking = Some(Seek { device: id.clone(), at: position, sent: None });
-        }
-        if bar.drag_stopped() || (bar.changed() && !bar.dragged()) {
-            *seeking = Some(Seek { device: id.clone(), at: position, sent: Some(now) });
-            asked = Some(Control::Seek { position });
-        }
+        asked = seek_let_go(seeking, id, &bar, position, now);
         if waiting {
             ui.ctx().request_repaint_after(RUN_ON);
         }

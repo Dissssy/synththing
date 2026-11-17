@@ -4,11 +4,14 @@
 //!
 //! The Now playing page is the visualizer over the controls: the seek bar
 //! as the line between them, the song's name (scrolling when it's too long
-//! to fit), and the transport. The chevron folds the controls away, giving
+//! to fit), and the transport. The chevrons fold the controls away, giving
 //! the visualizer the whole screen, with a small handle left to bring them
 //! back (touches on the visualizer go to the script, so they can't be what
-//! brings them back). The visualizer can give way to the song's art. The menu at the top left opens the other pages, which
-//! are the desktop's tabs, and the windows the desktop's menus open.
+//! brings them back), or expand them over the whole page, bigger, as a
+//! remote: what following another device starts in. The visualizer can
+//! give way to the song's art. The menu at the top left opens the other
+//! pages, which are the desktop's tabs, and the windows the desktop's menus
+//! open.
 
 use std::time::{Duration, Instant};
 
@@ -17,6 +20,7 @@ use eframe::egui::{self, AtomExt as _};
 use super::preferences::PrefTab;
 use super::{fmt_time, icon, status_color, status_outcome, App};
 use crate::audio::{AudioCommand, PlaybackShared};
+use crate::commands::Command;
 use crate::engine::EngineView;
 use crate::frame_timing;
 use crate::lua_visualizer;
@@ -117,8 +121,12 @@ pub(super) struct Mobile {
     /// What ran off the screen, noted in the log (`overflow.rs`).
     overflow: super::overflow::Overflow,
     drawer_open: bool,
-    /// The Now playing page's controls folded away.
-    collapsed: bool,
+    /// How much of the Now playing page the controls take.
+    controls: Controls,
+    /// Following another device, as of the last frame; and whether that
+    /// expanded the controls (leaving puts them back).
+    following: bool,
+    expanded_for_following: bool,
     /// What the media session was last told, and when.
     #[cfg(target_os = "android")]
     told: Option<(crate::android::Playback, std::time::Instant)>,
@@ -144,6 +152,26 @@ pub(super) struct Mobile {
     /// press while its toast shows leaves (`mobile_back`).
     back_to_leave: Option<Instant>,
 }
+
+/// How much of the Now playing page the controls take.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Controls {
+    /// Under the visualizer.
+    #[default]
+    Shown,
+    /// Folded away: the visualizer has the whole screen.
+    Folded,
+    /// The whole page, bigger, with no visualizer: a remote.
+    Expanded,
+}
+
+/// How much bigger the controls are expanded (at most: they shrink to fit
+/// a narrow screen's width).
+const EXPANDED_SCALE: f32 = 1.4;
+/// The transport's buttons (shuffle, previous, play/pause, next, loop) and
+/// the gap between them, at their usual size.
+const TRANSPORT: [f32; 5] = [40.0, 52.0, 68.0, 52.0, 40.0];
+const TRANSPORT_GAP: f32 = 12.0;
 
 /// How long a toast shows, at least: a failure longer, to be read. A long
 /// one stays long enough to read (`READING_SPEED` characters a second).
@@ -201,7 +229,9 @@ impl App {
         self.mobile_back(&ctx);
         let view = &shared.view;
         let page = self.mobile_state.page;
-        let fill_screen = page == Page::NowPlaying && self.mobile_state.collapsed;
+        self.expand_for_following();
+        let controls = self.mobile_state.controls;
+        let fill_screen = page == Page::NowPlaying && controls == Controls::Folded;
         // The visualizer filling the screen is full screen: no status or
         // navigation bar either (a swipe from the edge shows them a moment).
         #[cfg(target_os = "android")]
@@ -223,10 +253,12 @@ impl App {
         if !fill_screen {
             egui::Panel::top("mobile_top_bar").show(ui, |ui| frame_timing::time("top bar", || self.mobile_top_bar_ui(ui)));
         }
-        if page == Page::NowPlaying {
+        if page == Page::NowPlaying && controls == Controls::Expanded {
+            egui::CentralPanel::default().show(ui, |ui| frame_timing::time("controls bar", || self.expanded_controls_ui(ui, view)));
+        } else if page == Page::NowPlaying {
             if !fill_screen {
                 egui::Panel::bottom("mobile_controls")
-                    .show(ui, |ui| frame_timing::time("controls bar", || self.mobile_controls_ui(ui, view)));
+                    .show(ui, |ui| frame_timing::time("controls bar", || self.mobile_controls_ui(ui, view, 1.0)));
             }
             egui::CentralPanel::default().frame(egui::Frame::NONE).show(ui, |ui| {
                 if self.config.now_playing_art {
@@ -383,8 +415,8 @@ impl App {
             self.library_close_details();
         } else if state.page == Page::Grouping && grouping_open {
             self.grouping_back();
-        } else if state.page == Page::NowPlaying && state.collapsed {
-            state.collapsed = false;
+        } else if state.page == Page::NowPlaying && state.controls != Controls::Shown {
+            state.controls = Controls::Shown;
         } else if state.page != Page::NowPlaying {
             state.page = Page::NowPlaying;
         } else if cfg!(target_os = "android") {
@@ -461,125 +493,215 @@ impl App {
         }
     }
 
-    /// Under the visualizer: the seek bar, the song, the transport.
-    fn mobile_controls_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
-        if self.following() {
-            return self.following_bar_ui(ui, view);
+    /// Following another device starts with the controls expanded, as a
+    /// remote; leaving puts them back, unless they were changed meanwhile.
+    fn expand_for_following(&mut self) {
+        let following = self.following();
+        let state = &mut self.mobile_state;
+        if following == state.following {
+            return;
         }
+        state.following = following;
+        if following {
+            state.expanded_for_following = state.controls != Controls::Expanded;
+            state.controls = Controls::Expanded;
+        } else if std::mem::take(&mut state.expanded_for_following) && state.controls == Controls::Expanded {
+            state.controls = Controls::Shown;
+        }
+    }
+
+    /// The controls expanded over the whole page, bigger, centered up and
+    /// down (by their height last frame).
+    fn expanded_controls_ui(&mut self, ui: &mut egui::Ui, view: &EngineView) {
+        let id = egui::Id::unique("expanded_controls_height");
+        let height: f32 = ui.ctx().data(|d| d.get_temp(id)).unwrap_or(0.0);
+        ui.add_space(((ui.available_height() - height) / 2.0).max(0.0));
+        let top = ui.cursor().top();
+        // (As big as the transport still fits across.)
+        let fits = ui.available_width() / (TRANSPORT.iter().sum::<f32>() + TRANSPORT_GAP * (TRANSPORT.len() - 1) as f32);
+        self.mobile_controls_ui(ui, view, EXPANDED_SCALE.min(fits));
+        let drawn = ui.cursor().top() - top;
+        if (drawn - height).abs() > 0.5 {
+            ui.ctx().data_mut(|d| d.insert_temp(id, drawn));
+            ui.ctx().request_repaint();
+        }
+    }
+
+    /// The controls, `scale` times their size: the seek bar, the song, the
+    /// transport and the song's buttons. Under the visualizer, or expanded.
+    /// While following another device they show its song and drive it
+    /// (`run_command` and `leader_seek_ui` pass what's asked on).
+    fn mobile_controls_ui(&mut self, ui: &mut egui::Ui, view: &EngineView, scale: f32) {
+        let ctx = ui.ctx().clone();
+        let leader = self.leader();
+        let expanded = self.mobile_state.controls == Controls::Expanded;
         // The seek bar, edge to edge: the line between the visualizer and
         // the controls. In the tempo's color, as on the desktop.
-        let accent = self.transport_accent(ui.ctx(), view);
-        let shown = self.seek_shown(view);
-        let mut position = view.position;
-        let changed = ui
+        let accent = self.transport_accent(&ctx, view);
+        let (at, length) = ui
             .scope(|ui| {
                 ui.spacing_mut().slider_width = ui.available_width();
-                ui.spacing_mut().interact_size.y = 28.0;
-                super::seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed()
+                ui.spacing_mut().interact_size.y = 28.0 * scale;
+                match &leader {
+                    Some(leader) => self.leader_seek_ui(ui, leader, None),
+                    None => {
+                        let shown = self.seek_shown(view);
+                        let mut position = view.position;
+                        if super::seek_bar_ui(ui, &mut position, shown.span, shown.marks, accent).changed() {
+                            self.send(AudioCommand::Seek(position));
+                        }
+                        (shown.at, shown.length)
+                    }
+                }
             })
             .inner;
-        if changed {
-            self.send(AudioCommand::Seek(position));
-        }
 
+        // Where it is, and the chevrons: the controls bigger or smaller.
+        let small = 32.0 * scale;
         ui.horizontal(|ui| {
-            ui.monospace(format!("{} / {}", fmt_time(shown.at), fmt_time(shown.length)));
+            let time = format!("{} / {}", fmt_time(at), fmt_time(length));
+            ui.label(egui::RichText::new(time).monospace().size(text_size(ui, egui::TextStyle::Monospace, scale)));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.add(big_icon_button("caret-down", 32.0)).on_hover_text("Fold the controls away").clicked() {
-                    self.mobile_state.collapsed = true;
-                }
-                let art = self.config.now_playing_art;
-                if ui.add(big_icon_button("image", 32.0).selected(art)).on_hover_text("Show the song's art instead of the visualizer").clicked() {
-                    self.config.now_playing_art = !art;
-                    if let Err(e) = self.config.save() {
-                        self.status = format!("Couldn't save preferences: {e}");
+                let controls = &mut self.mobile_state.controls;
+                if expanded {
+                    if ui.add(big_icon_button("caret-down", small)).on_hover_text("Shrink the controls: the visualizer comes back").clicked() {
+                        *controls = Controls::Shown;
                     }
-                    super::toast::show(ui.ctx(), if art { "Showing the visualizer" } else { "Showing the song's art" });
+                    return;
                 }
-                // The song's details and its star, for the song playing.
-                let Some(song) = self.current_song.clone() else { return };
-                if ui.add(big_icon_button("info", 32.0)).on_hover_text("Song info").clicked() {
-                    self.details_for = Some(vec![song.clone()]);
+                if ui.add(big_icon_button("caret-down", small)).on_hover_text("Fold the controls away").clicked() {
+                    *controls = Controls::Folded;
                 }
-                if self.songs.get(&song).is_some() && ui.add(big_icon_button("tag", 32.0)).on_hover_text("Tag this song").clicked() {
-                    self.tags_for = Some(vec![song.clone()]);
-                }
-                if let Some(toggle) = self.quick_toggle(crate::song_store::STARRED)
-                    && super::tags::quick_toggle_button(ui, &self.songs, &toggle, 16.0, egui::Vec2::splat(32.0)).clicked()
-                {
-                    self.tag_songs(super::tags::TagAction::Set(toggle.tag, !toggle.on), &[song]);
+                if ui.add(big_icon_button("caret-up", small)).on_hover_text("Expand the controls: bigger, without the visualizer").clicked() {
+                    *controls = Controls::Expanded;
                 }
             });
         });
 
-        let title = self.current_title().or_else(|| view.track_name.clone());
-        let title = egui::RichText::new(title.as_deref().unwrap_or("Nothing playing")).heading().strong();
+        if let Some(leader) = &leader {
+            ui.horizontal(|ui| self.leader_line_ui(ui, leader, view));
+        }
+
+        let song = leader.as_ref().and_then(|l| l.state.song.clone());
+        let title = match &leader {
+            Some(_) => song.as_ref().map(|s| s.title.clone()),
+            None => self.current_title().or_else(|| view.track_name.clone()),
+        };
+        let title = egui::RichText::new(title.as_deref().unwrap_or("Nothing playing"))
+            .strong()
+            .size(text_size(ui, egui::TextStyle::Heading, scale));
         ui.vertical_centered(|ui| crate::marquee::show(ui, title, true));
         let mut detail = Vec::new();
-        if let Some(np) = self.playing_entry()
-            && let Some(list) = self.playlists.lists.get(np.list)
-        {
-            detail.push(format!("{} {}/{}", list.playlist.name, np.entry + 1, list.playlist.entries.len()));
+        match &leader {
+            Some(_) => detail.extend(song.and_then(|s| s.artist)),
+            None => {
+                if let Some(np) = self.playing_entry()
+                    && let Some(list) = self.playlists.lists.get(np.list)
+                {
+                    detail.push(format!("{} {}/{}", list.playlist.name, np.entry + 1, list.playlist.entries.len()));
+                }
+                if view.has_midi {
+                    detail.push(view.soundfont_name.clone().unwrap_or_else(|| "no soundfont".to_string()));
+                }
+            }
         }
-        if view.has_midi {
-            detail.push(view.soundfont_name.clone().unwrap_or_else(|| "no soundfont".to_string()));
-        }
-        ui.weak(if detail.is_empty() { " ".to_string() } else { detail.join("  \u{b7}  ") });
-        ui.add_space(6.0);
+        let detail = if detail.is_empty() { " ".to_string() } else { detail.join("  \u{b7}  ") };
+        ui.vertical_centered(|ui| ui.label(egui::RichText::new(detail).weak().size(text_size(ui, egui::TextStyle::Body, scale))));
+        ui.add_space(6.0 * scale);
 
         // The transport, centered: shuffle and loop either side of
-        // previous, play/pause (biggest) and next.
-        let sizes = [40.0, 52.0, 68.0, 52.0, 40.0];
-        let gap = 12.0;
-        let width: f32 = sizes.iter().sum::<f32>() + gap * (sizes.len() - 1) as f32;
-        let row = egui::vec2(ui.available_width(), sizes[2]);
-        ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.spacing_mut().item_spacing.x = gap;
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            let shuffle = ui.add(big_icon_button("shuffle", sizes[0]).selected(self.shuffle));
-            if shuffle.on_hover_text(super::shuffle_text(self.shuffle)).clicked() {
+        // previous, play/pause (biggest) and next. Shuffle and loop are this
+        // device's own, so off while following.
+        let sizes = TRANSPORT.map(|s| s * scale);
+        let theirs = "The device you follow keeps its own";
+        centered_row(ui, &sizes, TRANSPORT_GAP * scale, |ui| {
+            let shuffle = ui.add_enabled(leader.is_none(), big_icon_button("shuffle", sizes[0]).selected(self.shuffle));
+            if shuffle.on_hover_text(super::shuffle_text(self.shuffle)).on_disabled_hover_text(theirs).clicked() {
                 self.set_shuffle(!self.shuffle);
-                super::toast::show(ui.ctx(), super::shuffle_text(self.shuffle));
+                super::toast::show(&ctx, super::shuffle_text(self.shuffle));
             }
             if ui.add(big_icon_button("skip-back", sizes[1])).on_hover_text("Previous").clicked() {
-                self.previous_track(view.position);
+                self.run_command(&ctx, Command::PreviousTrack, view);
             }
+            let paused = leader.as_ref().map_or(view.paused, |l| l.state.paused);
             if ui
-                .add(super::play_button(ui.ctx(), view.paused, sizes[2] * 0.5, egui::Vec2::splat(sizes[2])))
-                .on_hover_text(if view.paused { "Play" } else { "Pause" })
+                .add(super::play_button(&ctx, paused, sizes[2] * 0.5, egui::Vec2::splat(sizes[2])))
+                .on_hover_text(if paused { "Play" } else { "Pause" })
                 .clicked()
             {
-                self.send(AudioCommand::TogglePause);
+                self.run_command(&ctx, Command::TogglePause, view);
             }
             if ui
-                .add_enabled(self.has_next(), big_icon_button("skip-forward", sizes[3]))
+                .add_enabled(leader.is_some() || self.has_next(), big_icon_button("skip-forward", sizes[3]))
                 .on_hover_text("Next")
                 .clicked()
             {
-                self.next_track();
+                self.run_command(&ctx, Command::NextTrack, view);
             }
             let glyph = if self.loop_mode == LoopMode::One { "repeat-once" } else { "repeat" };
             let hover = super::loop_text(self.loop_mode);
-            if ui.add(big_icon_button(glyph, sizes[4]).selected(self.loop_mode != LoopMode::Off)).on_hover_text(hover).clicked() {
+            let looping = ui.add_enabled(leader.is_none(), big_icon_button(glyph, sizes[4]).selected(self.loop_mode != LoopMode::Off));
+            if looping.on_hover_text(hover).on_disabled_hover_text(theirs).clicked() {
                 self.set_loop_mode(self.loop_mode.cycle());
-                super::toast::show(ui.ctx(), super::loop_text(self.loop_mode));
+                super::toast::show(&ctx, super::loop_text(self.loop_mode));
             }
         });
-        ui.add_space(6.0);
+        ui.add_space(6.0 * scale);
+
+        // The song's buttons (for a song of this device's library), the
+        // art and the other devices, in a row of their own.
+        let song = self.current_song.clone().filter(|s| leader.is_none() && self.songs.get(s).is_some());
+        let star = self.tag_toggle(crate::song_store::STARRED);
+        let row = [small; 5];
+        centered_row(ui, &row[..if star.is_some() { 5 } else { 4 }], 12.0 * scale, |ui| {
+            if let Some(toggle) = &star {
+                let starred = ui.add_enabled_ui(song.is_some(), |ui| {
+                    super::tags::quick_toggle_button(ui, &self.songs, toggle, small * 0.5, egui::Vec2::splat(small))
+                });
+                if starred.inner.clicked()
+                    && let Some(song) = &song
+                {
+                    self.tag_songs(super::tags::TagAction::Set(toggle.tag.clone(), !toggle.on), std::slice::from_ref(song));
+                }
+            }
+            if ui.add_enabled(song.is_some(), big_icon_button("tag", small)).on_hover_text("Tag this song").clicked() {
+                self.tags_for = song.clone().map(|s| vec![s]);
+            }
+            if ui.add_enabled(song.is_some(), big_icon_button("info", small)).on_hover_text("Song info").clicked() {
+                self.details_for = song.clone().map(|s| vec![s]);
+            }
+            let art = self.config.now_playing_art;
+            let button = big_icon_button("image", small).selected(art);
+            if ui
+                .add_enabled(!expanded, button)
+                .on_hover_text("Show the song's art instead of the visualizer")
+                .on_disabled_hover_text("Shows in place of the visualizer")
+                .clicked()
+            {
+                self.config.now_playing_art = !art;
+                if let Err(e) = self.config.save() {
+                    self.status = format!("Couldn't save preferences: {e}");
+                }
+                super::toast::show(&ctx, if art { "Showing the visualizer" } else { "Showing the song's art" });
+            }
+            self.devices_button_ui(ui, view, Some(small));
+        });
 
         // Which visualizer, and the way to pick another.
-        let script = self
-            .active_script
-            .and_then(|i| self.available_scripts.get(i))
-            .map(|p| lua_visualizer::display_name(p))
-            .unwrap_or_else(|| "(none)".to_string());
-        ui.vertical_centered(|ui| {
-            let label = format!("{}  {script}", icon("waveform"));
-            if ui.add_enabled(!self.config.now_playing_art, egui::Button::new(label)).on_hover_text("Pick a visualizer").clicked() {
-                self.mobile_state.page = Page::Scripts;
-            }
-            self.devices_button_ui(ui, view);
-        });
+        if !expanded {
+            ui.add_space(6.0);
+            let script = self
+                .active_script
+                .and_then(|i| self.available_scripts.get(i))
+                .map(|p| lua_visualizer::display_name(p))
+                .unwrap_or_else(|| "(none)".to_string());
+            ui.vertical_centered(|ui| {
+                let label = format!("{}  {script}", icon("waveform"));
+                if ui.add_enabled(!self.config.now_playing_art, egui::Button::new(label)).on_hover_text("Pick a visualizer").clicked() {
+                    self.mobile_state.page = Page::Scripts;
+                }
+            });
+        }
         ui.add_space(6.0);
     }
 
@@ -610,7 +732,7 @@ impl App {
             .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-12.0, -12.0))
             .show(ctx, |ui| {
                 if ui.add(big_icon_button("caret-up", 40.0)).on_hover_text("Show the controls").clicked() {
-                    self.mobile_state.collapsed = false;
+                    self.mobile_state.controls = Controls::Shown;
                 }
             });
     }
@@ -1018,6 +1140,23 @@ pub(super) fn section_row(ui: &mut egui::Ui, glyph: &str, title: &str, summary: 
         weak,
     );
     response
+}
+
+/// `style`'s text size, `scale` times.
+fn text_size(ui: &egui::Ui, style: egui::TextStyle, scale: f32) -> f32 {
+    style.resolve(ui.style()).size * scale
+}
+
+/// A row of widgets `widths` wide, `gap` apart, centered across the page.
+fn centered_row(ui: &mut egui::Ui, widths: &[f32], gap: f32, add: impl FnOnce(&mut egui::Ui)) {
+    let width: f32 = widths.iter().sum::<f32>() + gap * widths.len().saturating_sub(1) as f32;
+    let height = widths.iter().copied().fold(0.0, f32::max);
+    let row = egui::vec2(ui.available_width(), height);
+    ui.allocate_ui_with_layout(row, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+        ui.spacing_mut().item_spacing.x = gap;
+        ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+        add(ui);
+    });
 }
 
 pub(super) fn big_icon_button(name: &str, size: f32) -> egui::Button<'static> {
