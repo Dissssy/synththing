@@ -22,9 +22,11 @@
 # Every folder caches downloads or builds between runs, so the runners skip
 # the GitHub cache (rust-cache, setup-gradle's cache) GitHub's runners use.
 # Wiping one is always safe, it just refills on the next run. Each runner
-# has its own build folder and toolchains (rustup has no locking, so two
-# runners mustn't install into one at once); cargo's registry is shared,
-# as cargo locks it.
+# has its own build folder, toolchains and cargo home (rustup has no
+# locking, and the rust-toolchain and install-action steps rewrite the
+# binaries in ~/.cargo/bin, so two runners mustn't share one: a job running
+# rustup while another rewrites it fails with "Text file busy"). Only
+# cargo's registry and git checkouts are shared, as cargo locks them.
 x-runner: &runner
   # Ubuntu 22.04: Linux release builds need a glibc at least as new as the
   # one they're built against, so an older one runs on more systems.
@@ -40,6 +42,9 @@ x-env: &env
   # wipes), so each build only redoes what changed.
   CARGO_TARGET_DIR: /root/target
   TRIM_TARGET_GB: ${TRIM_TARGET_GB:-30}
+  # rustup on the PATH, so dtolnay/rust-toolchain finds it instead of
+  # running rustup's installer again on every job.
+  PATH: /root/.cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 services:
   runner-linux:
@@ -50,8 +55,11 @@ services:
       LABELS: synththing-runner,synththing-runner-linux
     volumes:
       - ${RUNNER_ROOT}/rustup-linux:/root/.rustup
-      # cargo's registry, git checkouts and installed tools
-      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      # rustup and installed tools
+      - ${RUNNER_ROOT}/cargo-linux:/root/.cargo
+      # cargo's registry and git checkouts, shared
+      - ${RUNNER_ROOT}/cargo/registry:/root/.cargo/registry
+      - ${RUNNER_ROOT}/cargo/git:/root/.cargo/git
       - ${RUNNER_ROOT}/target-linux:/root/target
 
   runner-windows:
@@ -62,7 +70,9 @@ services:
       LABELS: synththing-runner,synththing-runner-windows
     volumes:
       - ${RUNNER_ROOT}/rustup-windows:/root/.rustup
-      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      - ${RUNNER_ROOT}/cargo-windows:/root/.cargo
+      - ${RUNNER_ROOT}/cargo/registry:/root/.cargo/registry
+      - ${RUNNER_ROOT}/cargo/git:/root/.cargo/git
       - ${RUNNER_ROOT}/target-windows:/root/target
       # the MSVC CRT and Windows SDK cargo-xwin downloads
       - ${RUNNER_ROOT}/xwin:/root/.cache/cargo-xwin
@@ -75,7 +85,9 @@ services:
       LABELS: synththing-runner,synththing-runner-android
     volumes:
       - ${RUNNER_ROOT}/rustup-android:/root/.rustup
-      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      - ${RUNNER_ROOT}/cargo-android:/root/.cargo
+      - ${RUNNER_ROOT}/cargo/registry:/root/.cargo/registry
+      - ${RUNNER_ROOT}/cargo/git:/root/.cargo/git
       - ${RUNNER_ROOT}/target-android:/root/target
       # the Android SDK, NDK and licences, where android-actions/setup-android
       # puts them (~/.android/sdk)
@@ -95,4 +107,6 @@ services:
       LABELS: synththing-runner-release
     volumes:
       - ${RUNNER_ROOT}/rustup-release:/root/.rustup
-      - ${RUNNER_ROOT}/cargo:/root/.cargo
+      - ${RUNNER_ROOT}/cargo-release:/root/.cargo
+      - ${RUNNER_ROOT}/cargo/registry:/root/.cargo/registry
+      - ${RUNNER_ROOT}/cargo/git:/root/.cargo/git
