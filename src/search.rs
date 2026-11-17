@@ -27,6 +27,7 @@ pub const HELP: &str = "Search for words (fuzzy), \"a phrase\" (past case and pu
     year: track: disc: length: size: plays: skips:  (5, >5, <5, >=5, <=5, 1..9, 5.., ..9)\n\
     \u{2003}length:>6m or >6:00 (a bare number is minutes), size:>1.2gb (bare: MB), year:90s\n\
     added:30d (12h, 2w, 6mo, 1y), added:2026-10 (that month), added:>=2026-01-01; played: and skipped: (when last) the same\n\
+    \u{2003}compare with another field of the same kind: skips:>plays, skipped:>played\n\
     tag:name  is:starred  has:album  (has: any text or number key)\n\
     is:wished  (songs filling a wish on your wishlist)  wish:\"Album name\"  (those filling that one)\n\
     matched:song  matched:album  matched:artist  (at MusicBrainz; -matched:album for what isn't)\n\
@@ -193,7 +194,7 @@ fn filter(term: &str, tags: &BTreeMap<String, Tag>) -> Result<Rule, Option<Strin
         return Err(known.then(String::new));
     }
     let bad = |why: &str| Err(Some(why.to_string()));
-    let rule = |field, op, value: &str| Ok(Rule { field, op, value: value.to_string(), to: String::new() });
+    let rule = |field, op, value: &str| Ok(Rule { field, op, value: value.to_string(), to: String::new(), against: None });
     match key.as_str() {
         "is" => match IS.iter().find(|(v, _)| v.eq_ignore_ascii_case(value)) {
             Some((_, field)) => rule(*field, if not { Op::IsFalse } else { Op::IsTrue }, ""),
@@ -226,10 +227,10 @@ fn filter(term: &str, tags: &BTreeMap<String, Tag>) -> Result<Rule, Option<Strin
                     };
                     rule(field, op, value)
                 }
-                Kind::Number => number(field, not, value).ok_or_else(|| {
+                Kind::Number => against(field, not, value).or_else(|| number(field, not, value)).ok_or_else(|| {
                     Some(if not { format!("{key}: can only leave out one value, like -{key}:5") } else { format!("{key}: takes {}", number_help(field)) })
                 }),
-                Kind::Date => date(field, not, value).ok_or_else(|| Some(format!("{key}: takes 30d, 2w, 6mo, 1y, 2026, 2026-10, 2026-10-20, >2026-10, <=2026..."))),
+                Kind::Date => against(field, not, value).or_else(|| date(field, not, value)).ok_or_else(|| Some(format!("{key}: takes 30d, 2w, 6mo, 1y, 2026, 2026-10, 2026-10-20, >2026-10, <=2026..."))),
                 Kind::Tag => match tags.iter().find(|(_, t)| t.name.eq_ignore_ascii_case(value)) {
                     Some((id, _)) => rule(field, if not { Op::HasNot } else { Op::Has }, id),
                     None => bad(&format!("There's no tag named {value}")),
@@ -326,7 +327,7 @@ fn comparison(value: &str) -> (Option<Op>, &str, &str) {
 /// or a decade for the year (`1990s`, `90s`). Only a plain value can be
 /// excluded.
 fn number(field: Field, not: bool, value: &str) -> Option<Rule> {
-    let rule = |op, value: &str, to: &str| Some(Rule { field, op, value: value.to_string(), to: to.to_string() });
+    let rule = |op, value: &str, to: &str| Some(Rule { field, op, value: value.to_string(), to: to.to_string(), against: None });
     if field == Field::Year
         && let Some(decade) = value.strip_suffix('s').and_then(|d| d.parse::<u32>().ok())
         && !not
@@ -347,12 +348,29 @@ fn number(field: Field, not: bool, value: &str) -> Option<Rule> {
     }
 }
 
+/// A filter comparing `field` with another of the song's fields of the
+/// same kind: `skips:>plays`, `skipped:>played`, `plays:skips` (the same),
+/// `-plays:skips` (not).
+fn against(field: Field, not: bool, value: &str) -> Option<Rule> {
+    let (op, other, to) = comparison(value);
+    let other = self::field(&other.to_lowercase()).filter(|o| o.kind() == field.kind())?;
+    let op = match (op, not, field.kind()) {
+        (None, false, Kind::Number) => Op::Is,
+        (None, true, Kind::Number) => Op::IsNot,
+        (Some(Op::Greater), false, Kind::Date) => Op::After,
+        (Some(Op::Less), false, Kind::Date) => Op::Before,
+        (Some(op), false, _) => op,
+        _ => return None,
+    };
+    (to.is_empty() && op.compares_fields(field.kind())).then(|| Rule { field, op, value: String::new(), to: String::new(), against: Some(other) })
+}
+
 /// A date `field`'s filter: how long ago (`30d`, `12h`, `2w`, `6mo`,
 /// `1y`: since; excluded, not), a year, month or day (`2026`, `2026-10`,
 /// `2026-10-20`: in it), or a `comparison` with one (`>2026-10` is
 /// after October, `>=2026-10` from its start).
 fn date(field: Field, not: bool, value: &str) -> Option<Rule> {
-    let rule = |op, value: &str, to: &str| Some(Rule { field, op, value: value.to_string(), to: to.to_string() });
+    let rule = |op, value: &str, to: &str| Some(Rule { field, op, value: value.to_string(), to: to.to_string(), against: None });
     let period = |v: &str| smart::parse_period(v).is_some();
     match comparison(value) {
         (None, v, _) if period(v) => rule(if not { Op::NotOn } else { Op::On }, v, ""),
@@ -378,7 +396,7 @@ mod tests {
     }
 
     fn rule(field: Field, op: Op, value: &str, to: &str) -> Rule {
-        Rule { field, op, value: value.into(), to: to.into() }
+        Rule { field, op, value: value.into(), to: to.into(), against: None }
     }
 
     fn term(text: &str, mode: Mode) -> Term {
@@ -441,6 +459,15 @@ mod tests {
         assert_eq!(rules("is:wished"), [rule(Field::Wished, Op::IsTrue, "", "")]);
         assert_eq!(rules("-is:Wished"), [rule(Field::Wished, Op::IsFalse, "", "")]);
         assert_eq!(rules(r#"wish:"Modal Soul""#), [rule(Field::Wish, Op::Is, "Modal Soul", "")]);
+        let against = |field, op, other| Rule { against: Some(other), ..rule(field, op, "", "") };
+        assert_eq!(rules("skips:>plays"), [against(Field::Skips, Op::Greater, Field::Plays)]);
+        assert_eq!(rules("plays:skips"), [against(Field::Plays, Op::Is, Field::Skips)]);
+        assert_eq!(rules("-plays:skips"), [against(Field::Plays, Op::IsNot, Field::Skips)]);
+        assert_eq!(rules("track:<=Disc"), [against(Field::Track, Op::AtMost, Field::Disc)]);
+        assert_eq!(rules("skipped:>played"), [against(Field::LastSkipped, Op::After, Field::LastPlayed)]);
+        assert_eq!(rules("added:<=played"), [against(Field::Imported, Op::AtMost, Field::LastPlayed)]);
+        assert!(rules("skips:>played").is_empty(), "a number doesn't compare with a date");
+        assert!(rules("skips:plays..9").is_empty(), "a range takes values");
     }
 
     #[test]
