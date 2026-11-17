@@ -427,6 +427,12 @@ fn unique(paths: impl IntoIterator<Item = PathBuf>) -> Vec<PathBuf> {
 
 /// The menu of the view: what to sort and group by, and (not for touch)
 /// which columns.
+/// The view menu's entries for the groups, under a line.
+fn fold_all_section(ui: &mut egui::Ui) -> Option<bool> {
+    ui.separator();
+    crate::app::fold_all_menu(ui)
+}
+
 fn view_menu(ui: &mut egui::Ui, view: &mut View, touch: bool) -> bool {
     let before = view.clone();
     ui.menu_button("Sort by", |ui| {
@@ -835,9 +841,20 @@ impl SongList {
             // from `ui.available_width()` instead fed back into the layout
             // and made the row (and its containing panel) grow every frame.
             tools(ui);
+            if let Some(any_open) = self.groups_open()
+                && let Some(fold) = crate::app::fold_all_button(ui, any_open)
+            {
+                self.fold_all(fold);
+            }
             if touch {
                 let button = crate::app::icon_button("sort-ascending");
-                egui::containers::menu::MenuButton::from_button(button).config(crate::menu::config(ui.ctx())).ui(ui, |ui| view_changed |= view_menu(ui, view, true));
+                let menu = egui::containers::menu::MenuButton::from_button(button).config(crate::menu::config(ui.ctx())).ui(ui, |ui| {
+                    view_changed |= view_menu(ui, view, true);
+                    self.groups_open().and_then(|_| fold_all_section(ui))
+                });
+                if let Some(fold) = menu.1.and_then(|r| r.inner) {
+                    self.fold_all(fold);
+                }
             }
             // (On a line of its own when the buttons leave it too little.)
             below = ui.available_width() < MIN_SEARCH_WIDTH;
@@ -921,6 +938,7 @@ impl SongList {
         }
         let active = *self.active_row.get_or_insert_with(|| self.active.as_ref().and_then(|(path, group)| active_row(items, path, group.as_deref())));
         let mut toggle = None;
+        let mut fold = None;
         let mut star = None;
         let path_of = |i: usize| match items.get(i) {
             Some(Item::Song(entry)) => Some(entry.path.clone()),
@@ -944,6 +962,9 @@ impl SongList {
                     });
                     if row.response.clicked() {
                         toggle = Some(key.clone());
+                    }
+                    if let Some(chosen) = crate::menu::context(&row.response, crate::app::fold_all_menu).and_then(|r| r.inner) {
+                        fold = Some(chosen);
                     }
                     return;
                 }
@@ -978,10 +999,38 @@ impl SongList {
             }
             self.selection.clear();
         }
+        if let Some(fold) = fold {
+            self.fold_all(fold);
+        }
         if view_changed {
             self.selection.clear();
         }
         output
+    }
+
+    /// Whether any group is open, when the rows are grouped (`None` when
+    /// they aren't, or aren't made yet).
+    fn groups_open(&self) -> Option<bool> {
+        let mut open = self.built.as_ref()?.items.iter().filter_map(|item| match item {
+            Item::Group { collapsed, .. } => Some(!collapsed),
+            Item::Song(_) => None,
+        });
+        let first = open.next()?;
+        Some(first || open.any(|o| o))
+    }
+
+    /// Closes every group listed now (`fold`), or opens them all.
+    fn fold_all(&mut self, fold: bool) {
+        if fold {
+            let keys = self.built.iter().flat_map(|built| &built.items).filter_map(|item| match item {
+                Item::Group { key, .. } => Some(key.clone()),
+                Item::Song(_) => None,
+            });
+            self.collapsed.extend(keys);
+        } else {
+            self.collapsed.clear();
+        }
+        self.selection.clear();
     }
 
     /// The column headers: click one to sort by it (again to turn it
@@ -1012,7 +1061,14 @@ impl SongList {
             whole |= response;
         }
         // (One menu for the whole header, under the row's ID.)
-        crate::menu::context(&whole, |ui| changed |= view_menu(ui, view, false));
+        let grouped = self.groups_open().is_some();
+        let menu = crate::menu::context(&whole, |ui| {
+            changed |= view_menu(ui, view, false);
+            grouped.then(|| fold_all_section(ui)).flatten()
+        });
+        if let Some(fold) = menu.and_then(|r| r.inner) {
+            self.fold_all(fold);
+        }
         if let Some(key) = sort_by {
             if view.sort == key {
                 view.descending = !view.descending;
@@ -1549,6 +1605,29 @@ mod tests {
         frame(&ctx, &mut list, &mut source, 1);
         made(&mut list);
         assert_eq!(rows(&list), ["Artist 0 (2)", "Song 0", "Song 3", "Artist 1 (2)", "Artist 2 (2)", "Song 2", "Song 5"]);
+    }
+
+    /// Collapse all closes every group, and expand all opens them again.
+    #[test]
+    fn folds_all_groups() {
+        let ctx = egui::Context::default();
+        let songs: Vec<PathBuf> = (0..6).map(|n| PathBuf::from(n.to_string())).collect();
+        let mut list = SongList::default();
+        let mut source = Fixed::new(&songs, numbered);
+        frame(&ctx, &mut list, &mut source, 1);
+        made(&mut list);
+        let rows = |list: &SongList| shape(&list.built.as_ref().unwrap().items);
+        assert_eq!(list.groups_open(), Some(true));
+        list.fold_all(true);
+        frame(&ctx, &mut list, &mut source, 1);
+        made(&mut list);
+        assert_eq!(rows(&list), ["Artist 0 (2)", "Artist 1 (2)", "Artist 2 (2)"]);
+        assert_eq!(list.groups_open(), Some(false));
+        list.fold_all(false);
+        frame(&ctx, &mut list, &mut source, 1);
+        made(&mut list);
+        assert_eq!(list.groups_open(), Some(true));
+        assert_eq!(rows(&list).len(), 9);
     }
 
     /// The headers and songs of `items`, as text.
