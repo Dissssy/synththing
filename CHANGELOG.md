@@ -2,6 +2,12 @@
 
 What changed in each version of synththing, newest first. The app shows the new parts after an update (and all of it under Help > Changelog...). Changes not released yet are in `changelog.d/`.
 
+## 2.12.1 (2026-11-17)
+
+### Added
+- Last.fm: after connecting, synththing asks whether to connect your other devices too, and sends the connection (encrypted, never stored) to the ones online. Preferences > Integrations > Last.fm also has a "Connect my other devices" button for later.
+- Last.fm: connect your account in Preferences > Integrations to show what's playing on your Last.fm profile and add the songs you listen to to your Last.fm history. Listens wait on the device while Last.fm can't be reached, and a device following another never sends. Works on Android too.
+
 ## 2.12.0 (2026-11-17)
 
 ### Added
