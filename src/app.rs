@@ -1199,6 +1199,8 @@ impl eframe::App for App {
             frame_timing::end();
             return;
         }
+        #[cfg(windows)]
+        self.settle_taskbar(&ctx);
         let shared = self.shared.lock().unwrap().clone();
         let view = &shared.view;
         self.visualizer_drawn = false;

@@ -119,8 +119,11 @@ pub(super) struct MiniPlayer {
     /// Where to put it, and how many more frames to put it there for
     /// (`SETTLE_FRAMES`).
     placing: Option<(Place, u8)>,
-    /// Frames left to keep it out of the taskbar for (`SETTLE_FRAMES`).
-    taskbar_frames: u8,
+    /// Whether the window belongs in the taskbar (not as the mini player),
+    /// and how many more frames on screen to say so for (`SETTLE_FRAMES`):
+    /// the shell sets the window's button as it's shown, so it's said
+    /// again once it's on screen.
+    taskbar: Option<(bool, u8)>,
     /// It's had focus since it was opened, so losing it closes it (unpinned).
     focused_once: bool,
     /// It stays until closed.
@@ -158,7 +161,7 @@ impl Default for MiniPlayer {
             open: false,
             window: None,
             placing: None,
-            taskbar_frames: 0,
+            taskbar: None,
             focused_once: false,
             pinned: true,
             at: None,
@@ -217,7 +220,7 @@ impl App {
             // Put away (hidden as the mini player): just shown again.
             self.hidden = false;
             self.mini.focused_once = false;
-            self.mini.taskbar_frames = SETTLE_FRAMES;
+            self.mini.taskbar = Some((false, SETTLE_FRAMES));
             ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
             ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             ctx.request_repaint();
@@ -232,7 +235,7 @@ impl App {
         let mini = &mut self.mini;
         mini.open = true;
         mini.focused_once = false;
-        mini.taskbar_frames = SETTLE_FRAMES;
+        mini.taskbar = Some((false, SETTLE_FRAMES));
         let size = mini.size();
         let (place, at) = match mini.at {
             Some(at) => (Place::At(at), at),
@@ -263,10 +266,7 @@ impl App {
             return;
         }
         self.mini.placing = None;
-        // (A hidden window goes back in by itself once it's shown.)
-        if !self.hidden {
-            show_in_taskbar(self.api.window, true);
-        }
+        self.mini.taskbar = Some((true, SETTLE_FRAMES));
         self.mini.picking = false;
         ctx.send_viewport_cmd(egui::ViewportCommand::WindowLevel(egui::WindowLevel::Normal));
         ctx.send_viewport_cmd(egui::ViewportCommand::EnableButtons { close: true, minimized: true, maximize: true });
@@ -283,13 +283,19 @@ impl App {
         }
     }
 
+    /// Per frame on screen: the window in the taskbar as the main window,
+    /// out of it as the mini player, for a few frames after either is
+    /// shown. (Not while hidden: showing it is what the shell answers.)
+    pub(super) fn settle_taskbar(&mut self, ctx: &egui::Context) {
+        let Some((shown, frames)) = self.mini.taskbar else { return };
+        show_in_taskbar(self.api.window, shown);
+        self.mini.taskbar = (frames > 1).then_some((shown, frames - 1));
+        ctx.request_repaint();
+    }
+
     /// The window as the mini player: the strip, and its drawer below it.
     pub(super) fn mini_player_ui(&mut self, ui: &mut egui::Ui, shared: &PlaybackShared) {
         let ctx = ui.ctx().clone();
-        if self.mini.taskbar_frames > 0 {
-            self.mini.taskbar_frames -= 1;
-            show_in_taskbar(self.api.window, false);
-        }
         // Never maximized as the mini player: un-maximizing puts a window
         // back at its old size and place (the main window's), so it's put
         // where it was again after.
