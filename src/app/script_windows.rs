@@ -148,7 +148,9 @@ impl App {
                          synththing's window does.",
                     );
                     let pads = &self.pad_frame.connected;
-                    ui.weak(if pads.is_empty() {
+                    ui.weak(if cfg!(target_os = "android") {
+                        "Controllers don't work on Android.".to_string()
+                    } else if pads.is_empty() {
                         "No controller connected.".to_string()
                     } else {
                         format!("Controllers: {}", pads.join(", "))
