@@ -43,7 +43,6 @@ clap = { version = "4.6", features = ["derive"] }         # command-line argumen
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }  # unpacking a downloaded ffmpeg (ffmpeg.rs)
 stylua = { version = "2.5.2", default-features = false, features = ["lua54"] }
 full_moon = { version = "2.2", default-features = false, features = ["lua54"] }
-gilrs = "0.11"
 tiny_http = "0.12"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 ed25519-dalek = "3.0.0"
@@ -82,6 +81,7 @@ noise = { version = "0.9", default-features = false }                      # noi
 rand = { version = "0.8", default-features = false }                       # random(seed) generators for scripts (script_math.rs)
 rand_xorshift = "0.3"                                                       # their algorithm, the same on every platform and version
 [target.'cfg(not(target_os = "android"))'.dependencies]
+gilrs = "0.11"                                            # game controllers (gamepad.rs); it has no Android backend
 eframe = "0.37"
 rfd = "0.15"                                              # native file and folder dialogs
 opener = { version = "0.9", features = ["reveal"] }       # "Show in folder": the system file manager, file selected (file_manager.rs)
