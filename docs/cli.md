@@ -80,6 +80,22 @@ With `--check`, it only checks that the script runs: it compiles and plays a few
 
 `--soundfont` defaults to the first one in the app's Soundfonts list. Exit codes: `0` made it (or it checked out), `1` the script has an error, `2` something couldn't be loaded.
 
+## theme-shot: draw a theme to a png
+
+```
+synththing theme-shot CODE [--out FILE] [--width POINTS] [--scale N]
+```
+
+Draws what the Themes window shows for a theme, its editor (every color and shape setting) and the preview under it, full height with nothing scrolled away, to a png, without opening a window. `CODE` is a theme's share code (the share button in the Themes window copies one, `synththing-theme:...`), or `-` to read it from stdin. For trying out themes from a script: change a color, draw it, look, repeat.
+
+| Option | Default | |
+|---|---|---|
+| `--out`, `-o` | `theme.png` | The png to write. |
+| `--width` | 560 | How wide the editor is, in points. |
+| `--scale` | 1 | Pixels per point: 2 draws it twice as big and sharper. |
+
+It draws with the GPU through wgpu, like the app. A machine with no GPU needs a software Vulkan driver (on Debian and Ubuntu, `mesa-vulkan-drivers`). Exit code 0 when it wrote the png, 2 when the code or the drawing failed.
+
 ## serve: run a server
 
 ```

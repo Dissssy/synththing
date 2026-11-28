@@ -98,6 +98,15 @@ pub enum Command {
     /// 1 if the script has an error, 2 if something couldn't be loaded.
     Preview(PreviewArgs),
 
+    /// Draw a theme's editor and preview, full height, to a png.
+    ///
+    /// Takes a theme's share code (Themes > share button) and draws what
+    /// the Themes window shows for it, every section unfolded and nothing
+    /// scrolled away, with no window. For trying out themes without the
+    /// app: change a color, look, repeat. Exit code 0 if it wrote the png,
+    /// 2 if the code or the drawing failed.
+    ThemeShot(ThemeShotArgs),
+
     /// Moderate a script library server, from the machine it runs on.
     ///
     /// Talks to the running server (at server.json's address, or --server),
@@ -326,6 +335,25 @@ pub struct PreviewArgs {
     /// song without an error. Writes no images.
     #[arg(long)]
     pub check: bool,
+}
+
+#[derive(Args, Debug)]
+pub struct ThemeShotArgs {
+    /// The theme's share code (synththing-theme:...), or - to read it
+    /// from stdin.
+    pub code: String,
+
+    /// The png to write.
+    #[arg(long, short, default_value = "theme.png")]
+    pub out: PathBuf,
+
+    /// How wide the editor is, in points.
+    #[arg(long, default_value_t = 560.0)]
+    pub width: f32,
+
+    /// Pixels per point: 2 for a sharper, twice as big picture.
+    #[arg(long, default_value_t = 1.0)]
+    pub scale: f32,
 }
 
 #[derive(Args, Debug)]

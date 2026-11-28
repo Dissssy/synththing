@@ -28,6 +28,9 @@ pub(super) struct ThemesState {
     /// Renaming the theme in use: the name being typed, and what's wrong
     /// with it.
     renaming: Option<(String, Option<String>)>,
+    /// Importing a theme: the share code being pasted, and what's wrong
+    /// with it.
+    importing: Option<(String, Option<String>)>,
     /// The UI scale while its slider is being dragged (applied on release,
     /// or the slider would rescale under the pointer).
     scale_drag: Option<f32>,
@@ -42,6 +45,8 @@ enum ThemeAction {
     SaveCopy,
     /// Drop the draft of a built-in theme.
     Discard,
+    /// Keep a theme from a share code as your own.
+    Import(Theme),
 }
 
 /// UI scale bounds and step.
@@ -248,6 +253,14 @@ impl App {
                 } else if ui.add(super::icon_button("copy")).on_hover_text(format!("Make your own theme, starting as a copy of {}", current.name)).clicked() {
                     action = Some(ThemeAction::Duplicate);
                 }
+                if ui.add(super::icon_button("share-network")).on_hover_text("Copy a share code: text anyone can paste into Import to get this theme").clicked() {
+                    ui.ctx().copy_text(current.share_code());
+                    self.status = format!("Copied {}'s share code.", current.name);
+                }
+                let importing = self.themes.importing.is_some();
+                if ui.add(super::icon_button("download-simple").selected(importing)).on_hover_text("Import a theme from a share code").clicked() {
+                    self.themes.importing = if importing { None } else { Some((String::new(), None)) };
+                }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| match &mut self.themes.renaming {
                     Some((text, _)) => {
                         let response = ui.add(egui::TextEdit::singleline(text).font(egui::TextStyle::Heading).desired_width(220.0));
@@ -275,6 +288,9 @@ impl App {
         if let Some((_, Some(error))) = &self.themes.renaming {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(imported) = self.theme_import_ui(ui) {
+            action = Some(ThemeAction::Import(imported));
+        }
         if builtin {
             ui.weak(if changed {
                 "Built in: your changes show everywhere now, and are kept once you save them as a copy."
@@ -283,6 +299,34 @@ impl App {
             });
         }
         action
+    }
+
+    /// The field a share code is pasted into, while importing: the theme
+    /// it holds once Import is clicked (or Enter pressed), if it's one.
+    fn theme_import_ui(&mut self, ui: &mut egui::Ui) -> Option<Theme> {
+        let (code, error) = self.themes.importing.as_mut()?;
+        let mut submit = false;
+        ui.horizontal(|ui| {
+            let field = ui.add(egui::TextEdit::singleline(code).hint_text("Paste a theme's share code").desired_width(320.0));
+            submit = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            submit |= ui.add_enabled(!code.trim().is_empty(), egui::Button::new("Import")).clicked();
+        });
+        if let Some(error) = error {
+            ui.colored_label(ui.visuals().error_fg_color, error.as_str());
+        }
+        if !submit {
+            return None;
+        }
+        match Theme::from_share_code(code) {
+            Ok(imported) => {
+                self.themes.importing = None;
+                Some(imported)
+            }
+            Err(e) => {
+                *error = Some(format!("{e:#}"));
+                None
+            }
+        }
     }
 
     /// Rename the theme in use (your own) to `name`; or say why not, still
@@ -359,6 +403,14 @@ impl App {
                 let name = current.name.clone();
                 self.pick_theme(ctx, name);
             }
+            Some(ThemeAction::Import(mut imported)) => {
+                let taken = self.theme_names();
+                if theme::check_name(&imported.name, &taken).is_err() {
+                    imported.name = theme::copy_name(imported.name.trim(), &taken);
+                }
+                self.status = format!("Imported the theme {}.", imported.name);
+                self.add_theme(ctx, imported);
+            }
             Some(ThemeAction::Delete) => {
                 self.config.custom_themes.remove(&current.name);
                 self.pick_theme(ctx, theme::DEFAULT_THEME.to_string());
@@ -386,6 +438,46 @@ impl App {
         // (Saved with the choice.)
         self.pick_theme(ctx, name);
     }
+}
+
+/// `synththing theme-shot`: the theme in `args.code` drawn as the Themes
+/// window's editor and preview would show it, full height, to a png.
+#[cfg(not(target_os = "android"))]
+pub fn theme_shot(args: &crate::cli::ThemeShotArgs) -> anyhow::Result<()> {
+    use std::io::Read;
+
+    use anyhow::{Context, anyhow};
+
+    let mut code = args.code.clone();
+    if code == "-" {
+        code.clear();
+        std::io::stdin().read_to_string(&mut code).context("reading the code from stdin")?;
+    }
+    let theme = Theme::from_share_code(&code)?;
+    let width = args.width;
+    let shown = theme.clone();
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(width + 16.0, 400.0))
+        .with_pixels_per_point(args.scale)
+        .with_theme(if theme.dark { egui::Theme::Dark } else { egui::Theme::Light })
+        .with_accessibility_check(false)
+        .with_context_setup(move |ctx| {
+            super::fonts::install(ctx);
+            theme.apply(ctx);
+        })
+        .wgpu()
+        .build_ui(move |ui| {
+            let mut edited = shown.clone();
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            theme_editor_ui(ui, &mut edited);
+            theme_preview_ui(ui);
+        });
+    harness.fit_contents();
+    let image = harness.render().map_err(|e| anyhow!("couldn't draw it: {e}"))?;
+    image.save(&args.out).with_context(|| format!("writing {}", args.out.display()))?;
+    println!("Wrote {} ({}x{}).", args.out.display(), image.width(), image.height());
+    Ok(())
 }
 
 /// A theme's color: its name, then its swatch (opening a picker) and hex.

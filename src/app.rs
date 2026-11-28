@@ -64,6 +64,8 @@ mod song_names;
 mod storage;
 mod sprite_editor;
 mod themes;
+#[cfg(not(target_os = "android"))]
+pub use themes::theme_shot;
 mod layouts;
 mod title_bar;
 mod toast;
