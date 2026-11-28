@@ -1461,6 +1461,20 @@
     },
     {
       "authors": [
+        "Lucas Meurer <hi@lucasmerlin.me>",
+        "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
+      ],
+      "license": "MIT OR Apache-2.0",
+      "name": "egui_kittest",
+      "repository": "https://github.com/emilk/egui",
+      "texts": [
+        1,
+        2
+      ],
+      "version": "0.37.0"
+    },
+    {
+      "authors": [
         "Emil Ernerfeldt <emil.ernerfeldt@gmail.com>"
       ],
       "license": "MIT OR Apache-2.0",
@@ -2554,6 +2568,20 @@
     },
     {
       "authors": [
+        "Lucas Meurer",
+        "rerun.io <opensource@rerun.io>"
+      ],
+      "license": "MIT OR Apache-2.0",
+      "name": "kittest",
+      "repository": "https://github.com/rerun-io/kittest",
+      "texts": [
+        34,
+        161
+      ],
+      "version": "0.5.0"
+    },
+    {
+      "authors": [
         "Raph Levien <raph.levien@gmail.com>"
       ],
       "license": "Apache-2.0 OR MIT",
@@ -2585,7 +2613,7 @@
       "repository": "https://github.com/rust-lang-nursery/lazy-static.rs",
       "texts": [
         8,
-        161
+        162
       ],
       "version": "1.5.0"
     },
@@ -2596,7 +2624,7 @@
       "repository": "https://github.com/rust-lang/libc",
       "texts": [
         17,
-        162
+        163
       ],
       "version": "0.2.189"
     },
@@ -2608,7 +2636,7 @@
       "name": "libloading",
       "repository": "https://github.com/nagisa/rust_libloading/",
       "texts": [
-        163
+        164
       ],
       "version": "0.8.9"
     },
@@ -2623,7 +2651,7 @@
       "name": "libm",
       "repository": "https://github.com/rust-lang/compiler-builtins",
       "texts": [
-        164
+        165
       ],
       "version": "0.2.16"
     },
@@ -2635,7 +2663,7 @@
       "name": "libsqlite3-sys",
       "repository": "https://github.com/rusqlite/rusqlite",
       "texts": [
-        165
+        166
       ],
       "version": "0.38.2"
     },
@@ -2671,7 +2699,7 @@
       "repository": "https://github.com/LukasKalbertodt/litrs",
       "texts": [
         17,
-        166
+        167
       ],
       "version": "1.0.0"
     },
@@ -2684,7 +2712,7 @@
       "repository": "https://github.com/Amanieu/parking_lot",
       "texts": [
         8,
-        167
+        168
       ],
       "version": "0.4.14"
     },
@@ -2722,7 +2750,7 @@
       "name": "lrc",
       "repository": "https://github.com/magiclen/lrc",
       "texts": [
-        168
+        169
       ],
       "version": "0.2.0"
     },
@@ -2734,7 +2762,7 @@
       "name": "lua-src",
       "repository": "https://github.com/mlua-rs/lua-src-rs",
       "texts": [
-        169
+        170
       ],
       "version": "551.0.1"
     },
@@ -2746,7 +2774,7 @@
       "name": "luajit-src",
       "repository": "https://github.com/mlua-rs/luajit-src-rs",
       "texts": [
-        170
+        171
       ],
       "version": "210.7.3+1ee778a"
     },
@@ -2758,7 +2786,7 @@
       "name": "lucene_query_builder",
       "repository": "https://github.com/oknozor/lucene_query_builder_rs",
       "texts": [
-        171
+        172
       ],
       "version": "0.4.0"
     },
@@ -2784,7 +2812,7 @@
       "name": "lz4_flex",
       "repository": "https://github.com/pseitz/lz4_flex",
       "texts": [
-        172
+        173
       ],
       "version": "0.13.1"
     },
@@ -2797,7 +2825,7 @@
       "repository": "https://github.com/RustCrypto/hashes",
       "texts": [
         6,
-        173
+        174
       ],
       "version": "0.11.0"
     },
@@ -2826,8 +2854,8 @@
       "name": "memmap2",
       "repository": "https://github.com/RazrFalcon/memmap2-rs",
       "texts": [
-        174,
-        175
+        175,
+        176
       ],
       "version": "0.9.11"
     },
@@ -2840,7 +2868,7 @@
       "repository": "https://github.com/hyperium/mime",
       "texts": [
         8,
-        176
+        177
       ],
       "version": "0.3.17"
     },
@@ -2852,7 +2880,7 @@
       "name": "mime_guess2",
       "repository": "https://github.com/ttys3/mime_guess2",
       "texts": [
-        177
+        178
       ],
       "version": "2.3.1"
     },
@@ -2866,10 +2894,10 @@
       "name": "miniz_oxide",
       "repository": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide",
       "texts": [
-        178,
         179,
         180,
-        181
+        181,
+        182
       ],
       "version": "0.8.9"
     },
@@ -2883,10 +2911,10 @@
       "name": "miniz_oxide",
       "repository": "https://github.com/Frommi/miniz_oxide/tree/master/miniz_oxide",
       "texts": [
-        178,
         179,
         180,
-        181
+        181,
+        182
       ],
       "version": "0.9.1"
     },
@@ -2899,7 +2927,7 @@
       "name": "mlua",
       "repository": "https://github.com/mlua-rs/mlua",
       "texts": [
-        182
+        183
       ],
       "version": "0.12.1"
     },
@@ -2923,8 +2951,8 @@
       "name": "moxcms",
       "repository": "https://github.com/awxkee/moxcms.git",
       "texts": [
-        183,
-        184
+        184,
+        185
       ],
       "version": "0.8.1"
     },
@@ -2935,8 +2963,8 @@
       "repository": "https://github.com/tauri-apps/muda",
       "texts": [
         8,
-        185,
-        186
+        186,
+        187
       ],
       "version": "0.19.3"
     },
@@ -2949,7 +2977,7 @@
       "name": "musicbrainz_rs",
       "repository": "https://github.com/RustyNova016/musicbrainz_rs",
       "texts": [
-        171
+        172
       ],
       "version": "0.14.0"
     },
@@ -2961,8 +2989,8 @@
       "name": "naga",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -2974,8 +3002,8 @@
       "name": "naga-types",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -2987,7 +3015,7 @@
       "name": "natord",
       "repository": "https://github.com/lifthrasiir/rust-natord",
       "texts": [
-        189
+        190
       ],
       "version": "1.0.9"
     },
@@ -3000,7 +3028,7 @@
       "repository": "https://github.com/paritytech/nohash-hasher",
       "texts": [
         58,
-        190
+        191
       ],
       "version": "0.2.0"
     },
@@ -3013,7 +3041,7 @@
       "repository": "https://github.com/razaekel/noise-rs",
       "texts": [
         58,
-        191
+        192
       ],
       "version": "0.9.0"
     },
@@ -3025,10 +3053,10 @@
       "name": "normpath",
       "repository": "https://github.com/dylni/normpath",
       "texts": [
-        192,
-        64,
         193,
-        194
+        64,
+        194,
+        195
       ],
       "version": "1.5.2"
     },
@@ -3042,7 +3070,7 @@
       "name": "notify",
       "repository": "https://github.com/notify-rs/notify.git",
       "texts": [
-        195
+        196
       ],
       "version": "8.2.0"
     },
@@ -3054,8 +3082,8 @@
       "name": "notify-types",
       "repository": "https://github.com/notify-rs/notify.git",
       "texts": [
-        196,
-        197
+        197,
+        198
       ],
       "version": "2.1.0"
     },
@@ -3093,8 +3121,8 @@
       "name": "num-conv",
       "repository": "https://github.com/jhpratt/num-conv",
       "texts": [
-        198,
-        199
+        199,
+        200
       ],
       "version": "0.2.2"
     },
@@ -3182,9 +3210,9 @@
       "name": "opener",
       "repository": "https://github.com/Seeker14491/opener",
       "texts": [
-        200,
+        201,
         65,
-        201
+        202
       ],
       "version": "0.9.0"
     },
@@ -3196,7 +3224,7 @@
       "name": "option-ext",
       "repository": "https://github.com/soc/option-ext.git",
       "texts": [
-        202
+        203
       ],
       "version": "0.2.0"
     },
@@ -3209,7 +3237,7 @@
       "name": "ordered-float",
       "repository": "https://github.com/reem/rust-ordered-float",
       "texts": [
-        203
+        204
       ],
       "version": "4.6.0"
     },
@@ -3221,9 +3249,9 @@
       "name": "os_str_bytes",
       "repository": "https://github.com/dylni/os_str_bytes",
       "texts": [
-        204,
+        205,
         64,
-        205
+        206
       ],
       "version": "6.6.1"
     },
@@ -3236,7 +3264,7 @@
       "repository": "https://github.com/Amanieu/parking_lot",
       "texts": [
         8,
-        167
+        168
       ],
       "version": "0.12.5"
     },
@@ -3249,7 +3277,7 @@
       "repository": "https://github.com/Amanieu/parking_lot",
       "texts": [
         8,
-        167
+        168
       ],
       "version": "0.9.12"
     },
@@ -3260,7 +3288,7 @@
       "repository": "https://github.com/linebender/parley",
       "texts": [
         8,
-        206
+        207
       ],
       "version": "0.1.1"
     },
@@ -3273,7 +3301,7 @@
       "repository": "https://github.com/RustCrypto/traits",
       "texts": [
         6,
-        207
+        208
       ],
       "version": "0.6.1"
     },
@@ -3335,7 +3363,7 @@
       "name": "phf",
       "repository": "https://github.com/rust-phf/rust-phf",
       "texts": [
-        208
+        209
       ],
       "version": "0.11.3"
     },
@@ -3347,7 +3375,7 @@
       "name": "phf_generator",
       "repository": "https://github.com/rust-phf/rust-phf",
       "texts": [
-        208
+        209
       ],
       "version": "0.11.3"
     },
@@ -3359,7 +3387,7 @@
       "name": "phf_macros",
       "repository": "https://github.com/rust-phf/rust-phf",
       "texts": [
-        208
+        209
       ],
       "version": "0.11.3"
     },
@@ -3371,7 +3399,7 @@
       "name": "phf_shared",
       "repository": "https://github.com/rust-phf/rust-phf",
       "texts": [
-        208
+        209
       ],
       "version": "0.11.3"
     },
@@ -3383,7 +3411,7 @@
       "name": "pico-args",
       "repository": "https://github.com/RazrFalcon/pico-args",
       "texts": [
-        209
+        210
       ],
       "version": "0.5.0"
     },
@@ -3420,7 +3448,7 @@
       "repository": "https://github.com/image-rs/image-png",
       "texts": [
         8,
-        210
+        211
       ],
       "version": "0.17.16"
     },
@@ -3433,7 +3461,7 @@
       "repository": "https://github.com/image-rs/image-png",
       "texts": [
         8,
-        210
+        211
       ],
       "version": "0.18.1"
     },
@@ -3446,7 +3474,7 @@
       "repository": "https://github.com/EmbarkStudios/poll-promise",
       "texts": [
         34,
-        211
+        212
       ],
       "version": "0.3.0"
     },
@@ -3459,7 +3487,7 @@
       "repository": "https://github.com/zesterer/pollster",
       "texts": [
         8,
-        212
+        213
       ],
       "version": "1.0.1"
     },
@@ -3472,7 +3500,7 @@
       "repository": "https://github.com/RustCrypto/universal-hashes",
       "texts": [
         6,
-        213
+        214
       ],
       "version": "0.9.1"
     },
@@ -3507,8 +3535,8 @@
       "name": "powerfmt",
       "repository": "https://github.com/jhpratt/powerfmt",
       "texts": [
-        214,
-        215
+        215,
+        216
       ],
       "version": "0.2.0"
     },
@@ -3520,8 +3548,8 @@
       "name": "ppv-lite86",
       "repository": "https://github.com/cryptocorrosion/cryptocorrosion",
       "texts": [
-        216,
-        217
+        217,
+        218
       ],
       "version": "0.2.21"
     },
@@ -3535,7 +3563,7 @@
       "repository": "https://github.com/EmbarkStudios/presser",
       "texts": [
         34,
-        211
+        212
       ],
       "version": "0.3.1"
     },
@@ -3561,7 +3589,7 @@
       "repository": "https://github.com/huonw/primal",
       "texts": [
         8,
-        218
+        219
       ],
       "version": "0.3.4"
     },
@@ -3573,8 +3601,8 @@
       "name": "proc-macro-error",
       "repository": "https://gitlab.com/CreepySkeleton/proc-macro-error",
       "texts": [
-        219,
-        220
+        220,
+        221
       ],
       "version": "1.0.4"
     },
@@ -3586,8 +3614,8 @@
       "name": "proc-macro-error-attr",
       "repository": "https://gitlab.com/CreepySkeleton/proc-macro-error",
       "texts": [
-        221,
-        220
+        222,
+        221
       ],
       "version": "1.0.4"
     },
@@ -3614,7 +3642,7 @@
       "repository": "https://github.com/SergioBenitez/proc-macro2-diagnostics",
       "texts": [
         17,
-        222
+        223
       ],
       "version": "0.10.1"
     },
@@ -3666,7 +3694,7 @@
       "name": "pulldown-cmark",
       "repository": "https://github.com/raphlinus/pulldown-cmark",
       "texts": [
-        223
+        224
       ],
       "version": "0.13.4"
     },
@@ -3678,8 +3706,8 @@
       "name": "pxfm",
       "repository": "https://github.com/awxkee/pxfm",
       "texts": [
-        183,
-        184
+        184,
+        185
       ],
       "version": "0.1.30"
     },
@@ -3691,8 +3719,8 @@
       "name": "qrcode",
       "repository": "https://github.com/kennytm/qrcode-rust",
       "texts": [
-        224,
-        225
+        225,
+        226
       ],
       "version": "0.14.1"
     },
@@ -3706,7 +3734,7 @@
       "repository": "http://github.com/tailhook/quick-error",
       "texts": [
         15,
-        226
+        227
       ],
       "version": "2.0.1"
     },
@@ -3732,9 +3760,9 @@
       "name": "rand",
       "repository": "https://github.com/rust-random/rand",
       "texts": [
-        227,
         228,
-        229
+        229,
+        230
       ],
       "version": "0.10.2"
     },
@@ -3747,9 +3775,9 @@
       "name": "rand",
       "repository": "https://github.com/rust-random/rand",
       "texts": [
-        227,
         228,
-        229
+        229,
+        230
       ],
       "version": "0.8.8"
     },
@@ -3763,9 +3791,9 @@
       "name": "rand_chacha",
       "repository": "https://github.com/rust-random/rand",
       "texts": [
-        227,
+        228,
         133,
-        229
+        230
       ],
       "version": "0.3.1"
     },
@@ -3777,9 +3805,9 @@
       "name": "rand_core",
       "repository": "https://github.com/rust-random/rand_core",
       "texts": [
+        232,
         231,
-        230,
-        232
+        233
       ],
       "version": "0.10.1"
     },
@@ -3792,9 +3820,9 @@
       "name": "rand_core",
       "repository": "https://github.com/rust-random/rand",
       "texts": [
-        227,
-        230,
-        229
+        228,
+        231,
+        230
       ],
       "version": "0.6.4"
     },
@@ -3806,9 +3834,9 @@
       "name": "rand_distr",
       "repository": "https://github.com/rust-random/rand_distr",
       "texts": [
-        227,
-        230,
-        233
+        228,
+        231,
+        234
       ],
       "version": "0.6.0"
     },
@@ -3821,9 +3849,9 @@
       "name": "rand_xorshift",
       "repository": "https://github.com/rust-random/rngs",
       "texts": [
-        227,
+        228,
         133,
-        229
+        230
       ],
       "version": "0.3.0"
     },
@@ -3835,8 +3863,8 @@
       "name": "range-alloc",
       "repository": "https://github.com/gfx-rs/range-alloc",
       "texts": [
-        187,
-        234
+        188,
+        235
       ],
       "version": "0.1.5"
     },
@@ -3848,9 +3876,9 @@
       "name": "raw-window-handle",
       "repository": "https://github.com/rust-windowing/raw-window-handle",
       "texts": [
-        179,
-        235,
-        236
+        180,
+        236,
+        237
       ],
       "version": "0.6.2"
     },
@@ -3916,7 +3944,7 @@
       "repository": "https://github.com/ebkalderon/renderdoc-rs",
       "texts": [
         8,
-        237
+        238
       ],
       "version": "1.1.0"
     },
@@ -3927,7 +3955,7 @@
       "repository": "https://github.com/linebender/resvg",
       "texts": [
         64,
-        238
+        239
       ],
       "version": "0.45.1"
     },
@@ -3939,7 +3967,7 @@
       "name": "rfd",
       "repository": "https://github.com/PolyMeilex/rfd",
       "texts": [
-        239
+        240
       ],
       "version": "0.15.4"
     },
@@ -3952,7 +3980,7 @@
       "name": "rgb",
       "repository": "https://github.com/kornelski/rust-rgb",
       "texts": [
-        240
+        241
       ],
       "version": "0.8.53"
     },
@@ -3962,9 +3990,9 @@
       "name": "ring",
       "repository": "https://github.com/briansmith/ring",
       "texts": [
-        241,
         242,
-        243
+        243,
+        244
       ],
       "version": "0.17.14"
     },
@@ -3975,7 +4003,7 @@
       "repository": "https://github.com/RustAudio/rodio",
       "texts": [
         64,
-        244
+        245
       ],
       "version": "0.22.2"
     },
@@ -3988,7 +4016,7 @@
       "repository": "https://github.com/RazrFalcon/roxmltree",
       "texts": [
         8,
-        245
+        246
       ],
       "version": "0.20.0"
     },
@@ -4014,7 +4042,7 @@
       "name": "rusqlite",
       "repository": "https://github.com/rusqlite/rusqlite",
       "texts": [
-        165
+        166
       ],
       "version": "0.40.2"
     },
@@ -4051,7 +4079,7 @@
       "repository": "https://github.com/djc/rustc-version-rs",
       "texts": [
         8,
-        167
+        168
       ],
       "version": "0.4.1"
     },
@@ -4064,8 +4092,8 @@
       "name": "rustfft",
       "repository": "https://github.com/ejmahler/RustFFT",
       "texts": [
-        246,
-        247
+        247,
+        248
       ],
       "version": "6.4.1"
     },
@@ -4076,8 +4104,8 @@
       "repository": "https://github.com/rustls/rustls",
       "texts": [
         8,
-        248,
-        249
+        249,
+        250
       ],
       "version": "0.23.45"
     },
@@ -4087,8 +4115,8 @@
       "name": "rustls-pki-types",
       "repository": "https://github.com/rustls/pki-types",
       "texts": [
-        250,
-        251
+        251,
+        252
       ],
       "version": "1.15.1"
     },
@@ -4098,7 +4126,7 @@
       "name": "rustls-webpki",
       "repository": "https://github.com/rustls/webpki",
       "texts": [
-        252
+        253
       ],
       "version": "0.103.15"
     },
@@ -4110,7 +4138,7 @@
       "name": "rustysynth",
       "repository": "https://github.com/sinshu/rustysynth",
       "texts": [
-        253
+        254
       ],
       "version": "1.3.6"
     },
@@ -4123,7 +4151,7 @@
       "repository": "https://github.com/BurntSushi/same-file",
       "texts": [
         10,
-        254,
+        255,
         12
       ],
       "version": "1.0.6"
@@ -4137,7 +4165,7 @@
       "repository": "https://github.com/bluss/scopeguard",
       "texts": [
         8,
-        255
+        256
       ],
       "version": "1.2.0"
     },
@@ -4162,7 +4190,7 @@
       "repository": "https://github.com/Voultapher/self_cell",
       "texts": [
         58,
-        256
+        257
       ],
       "version": "1.3.0"
     },
@@ -4279,7 +4307,7 @@
       "repository": "https://github.com/RustCrypto/hashes",
       "texts": [
         6,
-        173
+        174
       ],
       "version": "0.11.0"
     },
@@ -4296,8 +4324,8 @@
       "name": "shlex",
       "repository": "https://github.com/comex/rust-shlex",
       "texts": [
-        257,
-        258
+        258,
+        259
       ],
       "version": "2.0.1"
     },
@@ -4322,7 +4350,7 @@
       "name": "simd-adler32",
       "repository": "https://github.com/mcountryman/simd-adler32",
       "texts": [
-        259
+        260
       ],
       "version": "0.3.10"
     },
@@ -4347,7 +4375,7 @@
       "repository": "https://github.com/linebender/simplecss",
       "texts": [
         8,
-        260
+        261
       ],
       "version": "0.2.2"
     },
@@ -4359,7 +4387,7 @@
       "name": "siphasher",
       "repository": "https://github.com/jedisct1/rust-siphash",
       "texts": [
-        261
+        262
       ],
       "version": "1.0.3"
     },
@@ -4383,7 +4411,7 @@
       "repository": "https://github.com/servo/rust-smallvec",
       "texts": [
         8,
-        262
+        263
       ],
       "version": "1.16.0"
     },
@@ -4422,8 +4450,8 @@
       "name": "snafu",
       "repository": "https://github.com/shepmaster/snafu",
       "texts": [
-        263,
-        264
+        264,
+        265
       ],
       "version": "0.9.2"
     },
@@ -4435,8 +4463,8 @@
       "name": "snafu-derive",
       "repository": "https://github.com/shepmaster/snafu",
       "texts": [
-        263,
-        264
+        264,
+        265
       ],
       "version": "0.9.2"
     },
@@ -4448,7 +4476,7 @@
       "name": "souvlaki",
       "repository": "https://github.com/Sinono3/souvlaki",
       "texts": [
-        265
+        266
       ],
       "version": "0.8.3"
     },
@@ -4473,7 +4501,7 @@
       "repository": "https://github.com/storyyeller/stable_deref_trait",
       "texts": [
         8,
-        266
+        267
       ],
       "version": "1.2.1"
     },
@@ -4486,7 +4514,7 @@
       "repository": "https://github.com/nvzqz/static-assertions-rs",
       "texts": [
         58,
-        267
+        268
       ],
       "version": "1.1.0"
     },
@@ -4498,8 +4526,8 @@
       "name": "strength_reduce",
       "repository": "http://github.com/ejmahler/strength_reduce",
       "texts": [
-        246,
-        247
+        247,
+        248
       ],
       "version": "0.2.4"
     },
@@ -4511,7 +4539,7 @@
       "name": "strict-num",
       "repository": "https://github.com/RazrFalcon/strict-num",
       "texts": [
-        268
+        269
       ],
       "version": "0.1.1"
     },
@@ -4523,7 +4551,7 @@
       "name": "strsim",
       "repository": "https://github.com/dguo/strsim-rs",
       "texts": [
-        269
+        270
       ],
       "version": "0.10.0"
     },
@@ -4536,7 +4564,7 @@
       "name": "strsim",
       "repository": "https://github.com/rapidfuzz/strsim-rs",
       "texts": [
-        269
+        270
       ],
       "version": "0.11.1"
     },
@@ -4548,7 +4576,7 @@
       "name": "stylua",
       "repository": "https://github.com/johnnymorganz/stylua",
       "texts": [
-        270
+        271
       ],
       "version": "2.5.2"
     },
@@ -4561,7 +4589,7 @@
       "name": "subtle",
       "repository": "https://github.com/dalek-cryptography/subtle",
       "texts": [
-        271
+        272
       ],
       "version": "2.6.1"
     },
@@ -4572,7 +4600,7 @@
       "repository": "https://github.com/linebender/svgtypes",
       "texts": [
         8,
-        272
+        273
       ],
       "version": "0.15.3"
     },
@@ -4819,7 +4847,7 @@
       "name": "synstructure",
       "repository": "https://github.com/mystor/synstructure",
       "texts": [
-        273
+        274
       ],
       "version": "0.13.2"
     },
@@ -4832,7 +4860,7 @@
       "repository": "https://github.com/1Password/sys-locale",
       "texts": [
         58,
-        274
+        275
       ],
       "version": "0.3.2"
     },
@@ -4848,7 +4876,7 @@
       "repository": "https://github.com/Stebalien/tempfile",
       "texts": [
         8,
-        275
+        276
       ],
       "version": "3.27.0"
     },
@@ -4872,7 +4900,7 @@
       "name": "textwrap",
       "repository": "https://github.com/mgeisler/textwrap",
       "texts": [
-        276
+        277
       ],
       "version": "0.16.4"
     },
@@ -4951,7 +4979,7 @@
       "name": "tiff",
       "repository": "https://github.com/image-rs/image-tiff",
       "texts": [
-        277
+        278
       ],
       "version": "0.11.3"
     },
@@ -4964,8 +4992,8 @@
       "name": "time",
       "repository": "https://github.com/time-rs/time",
       "texts": [
-        198,
-        278
+        199,
+        279
       ],
       "version": "0.3.55"
     },
@@ -4978,8 +5006,8 @@
       "name": "time-core",
       "repository": "https://github.com/time-rs/time",
       "texts": [
-        198,
-        278
+        199,
+        279
       ],
       "version": "0.1.9"
     },
@@ -4992,8 +5020,8 @@
       "name": "time-macros",
       "repository": "https://github.com/time-rs/time",
       "texts": [
-        198,
-        278
+        199,
+        279
       ],
       "version": "0.2.32"
     },
@@ -5005,7 +5033,7 @@
       "name": "tiny-skia",
       "repository": "https://github.com/RazrFalcon/tiny-skia",
       "texts": [
-        279
+        280
       ],
       "version": "0.11.4"
     },
@@ -5017,7 +5045,7 @@
       "name": "tiny-skia-path",
       "repository": "https://github.com/RazrFalcon/tiny-skia/tree/master/path",
       "texts": [
-        279
+        280
       ],
       "version": "0.11.4"
     },
@@ -5031,7 +5059,7 @@
       "repository": "https://github.com/tiny-http/tiny-http",
       "texts": [
         8,
-        280
+        281
       ],
       "version": "0.12.0"
     },
@@ -5055,9 +5083,9 @@
       "name": "tinyvec",
       "repository": "https://github.com/Lokathor/tinyvec",
       "texts": [
-        281,
         282,
-        283
+        283,
+        284
       ],
       "version": "1.13.3"
     },
@@ -5158,7 +5186,7 @@
       "name": "tracing",
       "repository": "https://github.com/tokio-rs/tracing",
       "texts": [
-        284
+        285
       ],
       "version": "0.1.44"
     },
@@ -5172,7 +5200,7 @@
       "name": "tracing-attributes",
       "repository": "https://github.com/tokio-rs/tracing",
       "texts": [
-        284
+        285
       ],
       "version": "0.1.31"
     },
@@ -5184,7 +5212,7 @@
       "name": "tracing-core",
       "repository": "https://github.com/tokio-rs/tracing",
       "texts": [
-        284
+        285
       ],
       "version": "0.1.36"
     },
@@ -5196,8 +5224,8 @@
       "name": "transpose",
       "repository": "https://github.com/ejmahler/transpose",
       "texts": [
-        285,
-        286
+        286,
+        287
       ],
       "version": "0.2.3"
     },
@@ -5208,8 +5236,8 @@
       "repository": "https://github.com/tauri-apps/tray-icon",
       "texts": [
         8,
-        185,
-        287
+        186,
+        288
       ],
       "version": "0.24.2"
     },
@@ -5221,8 +5249,8 @@
       "name": "type-map",
       "repository": "https://github.com/kardeiz/type-map",
       "texts": [
-        288,
-        289
+        289,
+        290
       ],
       "version": "0.5.1"
     },
@@ -5245,9 +5273,9 @@
       "name": "typenum",
       "repository": "https://github.com/paholg/typenum",
       "texts": [
-        290,
         291,
-        292
+        292,
+        293
       ],
       "version": "1.20.1"
     },
@@ -5260,7 +5288,7 @@
       "repository": "https://github.com/seanmonstar/unicase",
       "texts": [
         8,
-        293
+        294
       ],
       "version": "2.10.0"
     },
@@ -5286,7 +5314,7 @@
       "texts": [
         17,
         5,
-        294
+        295
       ],
       "version": "1.0.24"
     },
@@ -5299,10 +5327,10 @@
       "name": "unicode-normalization",
       "repository": "https://github.com/unicode-rs/unicode-normalization",
       "texts": [
-        295,
+        296,
         8,
         130,
-        294
+        295
       ],
       "version": "0.1.26"
     },
@@ -5315,10 +5343,10 @@
       "name": "unicode-properties",
       "repository": "https://github.com/unicode-rs/unicode-properties",
       "texts": [
-        295,
+        296,
         8,
         130,
-        296
+        297
       ],
       "version": "0.1.5"
     },
@@ -5330,8 +5358,8 @@
       "name": "unicode-script",
       "repository": "https://github.com/unicode-rs/unicode-script",
       "texts": [
-        297,
-        298
+        298,
+        299
       ],
       "version": "0.5.9"
     },
@@ -5344,7 +5372,7 @@
       "name": "unicode-segmentation",
       "repository": "https://github.com/unicode-rs/unicode-segmentation",
       "texts": [
-        295,
+        296,
         8,
         130
       ],
@@ -5359,7 +5387,7 @@
       "name": "unicode-width",
       "repository": "https://github.com/unicode-rs/unicode-width",
       "texts": [
-        295,
+        296,
         8,
         130
       ],
@@ -5375,7 +5403,7 @@
       "name": "unicode-xid",
       "repository": "https://github.com/unicode-rs/unicode-xid",
       "texts": [
-        295,
+        296,
         8,
         130
       ],
@@ -5390,7 +5418,7 @@
       "repository": "https://github.com/RustCrypto/traits",
       "texts": [
         6,
-        299
+        300
       ],
       "version": "0.6.1"
     },
@@ -5402,7 +5430,7 @@
       "name": "untrusted",
       "repository": "https://github.com/briansmith/untrusted",
       "texts": [
-        300
+        301
       ],
       "version": "0.9.0"
     },
@@ -5416,7 +5444,7 @@
       "repository": "https://github.com/algesten/ureq",
       "texts": [
         58,
-        301
+        302
       ],
       "version": "3.4.2"
     },
@@ -5428,8 +5456,8 @@
       "name": "ureq-proto",
       "repository": "https://github.com/algesten/ureq-proto",
       "texts": [
-        224,
-        302
+        225,
+        303
       ],
       "version": "0.6.4"
     },
@@ -5454,7 +5482,7 @@
       "name": "url-escape",
       "repository": "https://github.com/magiclen/url-escape",
       "texts": [
-        303
+        304
       ],
       "version": "0.1.2"
     },
@@ -5465,7 +5493,7 @@
       "repository": "https://github.com/linebender/resvg",
       "texts": [
         64,
-        238
+        239
       ],
       "version": "0.45.1"
     },
@@ -5491,7 +5519,7 @@
       "name": "utf8_iter",
       "repository": "https://github.com/hsivonen/utf8_iter",
       "texts": [
-        304,
+        305,
         58,
         107
       ],
@@ -5507,7 +5535,7 @@
       "repository": "https://github.com/alacritty/vte",
       "texts": [
         17,
-        305
+        306
       ],
       "version": "0.2.2"
     },
@@ -5522,9 +5550,9 @@
       "name": "uuid",
       "repository": "https://github.com/uuid-rs/uuid",
       "texts": [
-        306,
+        307,
         138,
-        307
+        308
       ],
       "version": "0.8.2"
     },
@@ -5539,7 +5567,7 @@
       "repository": "https://github.com/uuid-rs/uuid",
       "texts": [
         8,
-        308
+        309
       ],
       "version": "1.26.0"
     },
@@ -5552,7 +5580,7 @@
       "repository": "https://github.com/mcgoo/vcpkg-rs",
       "texts": [
         138,
-        309
+        310
       ],
       "version": "0.2.15"
     },
@@ -5565,7 +5593,7 @@
       "repository": "https://github.com/rustonaut/vec1/",
       "texts": [
         58,
-        310
+        311
       ],
       "version": "1.12.1"
     },
@@ -5614,7 +5642,7 @@
       "repository": "https://github.com/linebender/vello",
       "texts": [
         64,
-        311
+        312
       ],
       "version": "0.2.0"
     },
@@ -5625,7 +5653,7 @@
       "repository": "https://github.com/linebender/vello",
       "texts": [
         64,
-        311
+        312
       ],
       "version": "0.2.0"
     },
@@ -5638,7 +5666,7 @@
       "repository": "https://github.com/SergioBenitez/version_check",
       "texts": [
         8,
-        312
+        313
       ],
       "version": "0.9.5"
     },
@@ -5662,8 +5690,8 @@
       "name": "web-time",
       "repository": "https://github.com/daxpedda/web-time",
       "texts": [
-        313,
-        314
+        314,
+        315
       ],
       "version": "1.1.0"
     },
@@ -5675,8 +5703,8 @@
       "name": "webbrowser",
       "repository": "https://github.com/amodm/webbrowser-rs",
       "texts": [
-        315,
-        316
+        316,
+        317
       ],
       "version": "1.2.4"
     },
@@ -5686,7 +5714,7 @@
       "name": "webpki-roots",
       "repository": "https://github.com/rustls/webpki-roots",
       "texts": [
-        317
+        318
       ],
       "version": "1.0.9"
     },
@@ -5699,7 +5727,7 @@
       "repository": "https://github.com/image-rs/weezl",
       "texts": [
         8,
-        318
+        319
       ],
       "version": "0.1.12"
     },
@@ -5711,8 +5739,8 @@
       "name": "wgpu",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -5724,8 +5752,8 @@
       "name": "wgpu-core",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -5737,8 +5765,8 @@
       "name": "wgpu-core-deps-windows-linux-android",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -5750,8 +5778,8 @@
       "name": "wgpu-hal",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -5763,8 +5791,8 @@
       "name": "wgpu-naga-bridge",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -5776,8 +5804,8 @@
       "name": "wgpu-types",
       "repository": "https://github.com/gfx-rs/wgpu",
       "texts": [
-        187,
-        188
+        188,
+        189
       ],
       "version": "30.0.1"
     },
@@ -5789,7 +5817,7 @@
       "name": "which",
       "repository": "https://github.com/harryfei/which-rs.git",
       "texts": [
-        319
+        320
       ],
       "version": "8.0.6"
     },
@@ -5802,7 +5830,7 @@
       "repository": "https://github.com/retep998/winapi-rs",
       "texts": [
         15,
-        320
+        321
       ],
       "version": "0.3.9"
     },
@@ -5815,7 +5843,7 @@
       "repository": "https://github.com/BurntSushi/winapi-util",
       "texts": [
         10,
-        254,
+        255,
         12
       ],
       "version": "0.1.11"
@@ -5828,8 +5856,8 @@
       "name": "windows",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.44.0"
     },
@@ -5839,8 +5867,8 @@
       "name": "windows",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.62.2"
     },
@@ -5850,8 +5878,8 @@
       "name": "windows-collections",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.3.2"
     },
@@ -5861,8 +5889,8 @@
       "name": "windows-core",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.62.2"
     },
@@ -5872,8 +5900,8 @@
       "name": "windows-future",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.3.2"
     },
@@ -5883,8 +5911,8 @@
       "name": "windows-implement",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.60.2"
     },
@@ -5894,8 +5922,8 @@
       "name": "windows-interface",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.59.3"
     },
@@ -5905,8 +5933,8 @@
       "name": "windows-link",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.2.1"
     },
@@ -5916,8 +5944,8 @@
       "name": "windows-numerics",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.3.1"
     },
@@ -5927,8 +5955,8 @@
       "name": "windows-registry",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.6.1"
     },
@@ -5938,8 +5966,8 @@
       "name": "windows-result",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.4.1"
     },
@@ -5949,8 +5977,8 @@
       "name": "windows-strings",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.5.1"
     },
@@ -5962,8 +5990,8 @@
       "name": "windows-sys",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.52.0"
     },
@@ -5975,8 +6003,8 @@
       "name": "windows-sys",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.59.0"
     },
@@ -5988,8 +6016,8 @@
       "name": "windows-sys",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.60.2"
     },
@@ -5999,8 +6027,8 @@
       "name": "windows-sys",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.61.2"
     },
@@ -6012,8 +6040,8 @@
       "name": "windows-targets",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.42.2"
     },
@@ -6025,8 +6053,8 @@
       "name": "windows-targets",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.52.6"
     },
@@ -6036,8 +6064,8 @@
       "name": "windows-targets",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.53.5"
     },
@@ -6047,8 +6075,8 @@
       "name": "windows-threading",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.2.1"
     },
@@ -6060,8 +6088,8 @@
       "name": "windows_x86_64_msvc",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.42.2"
     },
@@ -6073,8 +6101,8 @@
       "name": "windows_x86_64_msvc",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.52.6"
     },
@@ -6084,8 +6112,8 @@
       "name": "windows_x86_64_msvc",
       "repository": "https://github.com/microsoft/windows-rs",
       "texts": [
-        321,
-        322
+        322,
+        323
       ],
       "version": "0.53.1"
     },
@@ -6108,7 +6136,7 @@
       "name": "winnow",
       "repository": "https://github.com/winnow-rs/winnow",
       "texts": [
-        323
+        324
       ],
       "version": "0.7.15"
     },
@@ -6118,7 +6146,7 @@
       "name": "winnow",
       "repository": "https://github.com/winnow-rs/winnow",
       "texts": [
-        323
+        324
       ],
       "version": "1.0.4"
     },
@@ -6130,7 +6158,7 @@
       "name": "winresource",
       "repository": "https://github.com/BenjaminRi/winresource",
       "texts": [
-        324
+        325
       ],
       "version": "0.1.31"
     },
@@ -6154,7 +6182,7 @@
       "name": "xml-rs",
       "repository": "https://github.com/kornelski/xml-rs",
       "texts": [
-        325
+        326
       ],
       "version": "0.8.29"
     },
@@ -6166,7 +6194,7 @@
       "name": "xmlwriter",
       "repository": "https://github.com/RazrFalcon/xmlwriter",
       "texts": [
-        326
+        327
       ],
       "version": "0.1.0"
     },
@@ -6200,9 +6228,9 @@
       "name": "zerocopy",
       "repository": "https://github.com/google/zerocopy",
       "texts": [
-        327,
         328,
-        329
+        329,
+        330
       ],
       "version": "0.8.56"
     },
@@ -6212,9 +6240,9 @@
       "name": "zerocopy-derive",
       "repository": "https://github.com/google/zerocopy",
       "texts": [
-        327,
         328,
-        329
+        329,
+        330
       ],
       "version": "0.8.56"
     },
@@ -6251,7 +6279,7 @@
       "repository": "https://github.com/RustCrypto/utils",
       "texts": [
         58,
-        330
+        331
       ],
       "version": "1.9.0"
     },
@@ -6302,7 +6330,7 @@
       "name": "zip",
       "repository": "https://github.com/zip-rs/zip2",
       "texts": [
-        331
+        332
       ],
       "version": "8.6.0"
     },
@@ -6312,7 +6340,7 @@
       "name": "zlib-rs",
       "repository": "https://github.com/trifectatechfoundation/zlib-rs",
       "texts": [
-        332
+        333
       ],
       "version": "0.6.7"
     },
@@ -6334,7 +6362,7 @@
       "name": "zopfli",
       "repository": "https://github.com/zopfli-rs/zopfli",
       "texts": [
-        333
+        334
       ],
       "version": "0.8.3"
     },
@@ -6345,8 +6373,8 @@
       "repository": "https://github.com/etemesi254/zune-image",
       "texts": [
         58,
-        334,
-        335
+        335,
+        336
       ],
       "version": "0.5.3"
     },
@@ -6359,8 +6387,8 @@
       "repository": "https://github.com/etemesi254/zune-image/tree/dev/crates/zune-jpeg",
       "texts": [
         58,
-        334,
-        335
+        335,
+        336
       ],
       "version": "0.5.15"
     }
@@ -6527,6 +6555,7 @@
     "== LICENSE-MIT ==\nCopyright (c) 2016--2017\n\nPermission is hereby granted, free of charge, to any\nperson obtaining a copy of this software and associated\ndocumentation files (the \"Software\"), to deal in the\nSoftware without restriction, including without\nlimitation the rights to use, copy, modify, merge,\npublish, distribute, sublicense, and/or sell copies of\nthe Software, and to permit persons to whom the Software\nis furnished to do so, subject to the following\nconditions:\n\nThe above copyright notice and this permission notice\nshall be included in all copies or substantial portions\nof the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF\nANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED\nTO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT\nSHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY\nCLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR\nIN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER\nDEALINGS IN THE SOFTWARE.",
     "== LICENSE-MIT ==\nCopyright (c) 2022-2025 The RustCrypto Project Developers\nCopyright (c) 2022 Artyom Pavlov\n\nPermission is hereby granted, free of charge, to any\nperson obtaining a copy of this software and associated\ndocumentation files (the \"Software\"), to deal in the\nSoftware without restriction, including without\nlimitation the rights to use, copy, modify, merge,\npublish, distribute, sublicense, and/or sell copies of\nthe Software, and to permit persons to whom the Software\nis furnished to do so, subject to the following\nconditions:\n\nThe above copyright notice and this permission notice\nshall be included in all copies or substantial portions\nof the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF\nANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED\nTO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT\nSHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY\nCLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR\nIN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER\nDEALINGS IN THE SOFTWARE.",
     "== LICENSE-MIT ==\nCopyright (c) 2017 Pyfisch\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in\nall copies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN\nTHE SOFTWARE.",
+    "== LICENSE-MIT ==\nCopyright (c) 2024 Rerun Technologies AB <opensource@rerun.io>\n\nPermission is hereby granted, free of charge, to any\nperson obtaining a copy of this software and associated\ndocumentation files (the \"Software\"), to deal in the\nSoftware without restriction, including without\nlimitation the rights to use, copy, modify, merge,\npublish, distribute, sublicense, and/or sell copies of\nthe Software, and to permit persons to whom the Software\nis furnished to do so, subject to the following\nconditions:\n\nThe above copyright notice and this permission notice\nshall be included in all copies or substantial portions\nof the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF\nANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED\nTO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT\nSHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY\nCLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR\nIN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER\nDEALINGS IN THE SOFTWARE.",
     "== LICENSE-MIT ==\nCopyright (c) 2010 The Rust Project Developers\n\nPermission is hereby granted, free of charge, to any\nperson obtaining a copy of this software and associated\ndocumentation files (the \"Software\"), to deal in the\nSoftware without restriction, including without\nlimitation the rights to use, copy, modify, merge,\npublish, distribute, sublicense, and/or sell copies of\nthe Software, and to permit persons to whom the Software\nis furnished to do so, subject to the following\nconditions:\n\nThe above copyright notice and this permission notice\nshall be included in all copies or substantial portions\nof the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF\nANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED\nTO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT\nSHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY\nCLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR\nIN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER\nDEALINGS IN THE SOFTWARE.",
     "== LICENSE-MIT ==\nCopyright (c) The Rust Project Developers\n\nPermission is hereby granted, free of charge, to any\nperson obtaining a copy of this software and associated\ndocumentation files (the \"Software\"), to deal in the\nSoftware without restriction, including without\nlimitation the rights to use, copy, modify, merge,\npublish, distribute, sublicense, and/or sell copies of\nthe Software, and to permit persons to whom the Software\nis furnished to do so, subject to the following\nconditions:\n\nThe above copyright notice and this permission notice\nshall be included in all copies or substantial portions\nof the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF\nANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED\nTO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A\nPARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT\nSHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY\nCLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION\nOF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR\nIN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER\nDEALINGS IN THE SOFTWARE.",
     "== LICENSE ==\nCopyright © 2015, Simonas Kazlauskas\n\nPermission to use, copy, modify, and/or distribute this software for any purpose with or without\nfee is hereby granted, provided that the above copyright notice and this permission notice appear\nin all copies.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS\nSOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO EVENT SHALL THE\nAUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES\nWHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT,\nNEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF\nTHIS SOFTWARE.",
