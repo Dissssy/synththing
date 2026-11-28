@@ -88,6 +88,7 @@ opener = { version = "0.9", features = ["reveal"] }       # "Show in folder": th
 gethostname = "1.1"                                       # the default name of this device, for sign-ins (device.rs)
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] } # the system's media controls (media_controls.rs): MPRIS, Windows, macOS
 discord-rich-presence = "1.1"                                # what's playing, shown on Discord (discord.rs)
+egui_kittest = { version = "0.37", features = ["wgpu"] }      # rendering the theme editor to a png without a window (`theme-shot`, app/themes.rs)
 
 [target.'cfg(target_os = "android")'.dependencies]
 eframe = { version = "0.37", default-features = false, features = ["android-native-activity", "default_fonts", "links", "wgpu"] }

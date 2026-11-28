@@ -85,6 +85,13 @@ pub fn main() -> Result<()> {
         let config = Config::load().unwrap_or_default();
         std::process::exit(preview_command(args, &config));
     }
+    if let Some(Command::ThemeShot(args)) = &cli.command {
+        if let Err(e) = crate::app::theme_shot(args) {
+            eprintln!("error: {e:#}");
+            std::process::exit(2);
+        }
+        return Ok(());
+    }
     if let Some(Command::PublishBundled { server, dir }) = &cli.command {
         if let Err(e) = library::publish_bundled(server, dir.as_deref()) {
             eprintln!("error: {e}");

@@ -440,6 +440,46 @@ impl App {
     }
 }
 
+/// `synththing theme-shot`: the theme in `args.code` drawn as the Themes
+/// window's editor and preview would show it, full height, to a png.
+#[cfg(not(target_os = "android"))]
+pub fn theme_shot(args: &crate::cli::ThemeShotArgs) -> anyhow::Result<()> {
+    use std::io::Read;
+
+    use anyhow::{Context, anyhow};
+
+    let mut code = args.code.clone();
+    if code == "-" {
+        code.clear();
+        std::io::stdin().read_to_string(&mut code).context("reading the code from stdin")?;
+    }
+    let theme = Theme::from_share_code(&code)?;
+    let width = args.width;
+    let shown = theme.clone();
+    let mut harness = egui_kittest::Harness::builder()
+        .with_size(egui::vec2(width + 16.0, 400.0))
+        .with_pixels_per_point(args.scale)
+        .with_theme(if theme.dark { egui::Theme::Dark } else { egui::Theme::Light })
+        .with_accessibility_check(false)
+        .with_context_setup(move |ctx| {
+            super::fonts::install(ctx);
+            theme.apply(ctx);
+        })
+        .wgpu()
+        .build_ui(move |ui| {
+            let mut edited = shown.clone();
+            ui.set_width(width);
+            ui.spacing_mut().item_spacing.y = 8.0;
+            theme_editor_ui(ui, &mut edited);
+            theme_preview_ui(ui);
+        });
+    harness.fit_contents();
+    let image = harness.render().map_err(|e| anyhow!("couldn't draw it: {e}"))?;
+    image.save(&args.out).with_context(|| format!("writing {}", args.out.display()))?;
+    println!("Wrote {} ({}x{}).", args.out.display(), image.width(), image.height());
+    Ok(())
+}
+
 /// A theme's color: its name, then its swatch (opening a picker) and hex.
 fn color_row(ui: &mut egui::Ui, label: &str, info: &str, color: &mut theme::Hex, alpha: Alpha) {
     super::with_info(ui, info, |ui| {
