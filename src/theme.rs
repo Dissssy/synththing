@@ -7,10 +7,14 @@
 //! Built-in themes can't be changed; your own live in the config
 //! (`Config::custom_themes`, colors as `#rrggbb` hex), so settings sync
 //! carries them, made by duplicating another or by saving a changed built-in one
-//! as a copy. The Themes window (`app/themes.rs`) picks and edits them.
+//! as a copy. The Themes window (`app/themes.rs`) picks and edits them,
+//! and shares any theme as a share code to copy and paste (`share_code`).
 
 
-use anyhow::{Result, bail};
+use std::io::{Read, Write};
+
+use anyhow::{Result, anyhow, bail};
+use base64::Engine;
 use eframe::egui::{self, Color32, CornerRadius, Shadow, Stroke, Visuals};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -484,6 +488,35 @@ pub fn dock_style(style: &egui::Style) -> egui_dock::Style {
     dock
 }
 
+/// What a share code starts with: tells one apart from any other text.
+const SHARE_PREFIX: &str = "synththing-theme:";
+/// The most a share code's theme may unpack to (its JSON).
+const SHARE_MAX: u64 = 64 * 1024;
+
+impl Theme {
+    /// This theme as text to copy and paste to someone: its JSON,
+    /// deflated, in base64 after `SHARE_PREFIX`.
+    pub fn share_code(&self) -> String {
+        let json = serde_json::to_vec(self).expect("a theme is always JSON");
+        let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::best());
+        encoder.write_all(&json).expect("deflating into memory");
+        let packed = encoder.finish().expect("deflating into memory");
+        format!("{SHARE_PREFIX}{}", base64::engine::general_purpose::STANDARD.encode(packed))
+    }
+
+    /// The theme a share code (`share_code`) holds. Spaces and line
+    /// breaks in it (a chat wrapping it, say) don't matter.
+    pub fn from_share_code(code: &str) -> Result<Theme> {
+        let code: String = code.split_whitespace().collect();
+        let Some(body) = code.strip_prefix(SHARE_PREFIX) else { bail!("that isn't a theme code") };
+        let damaged = || anyhow!("that theme code is damaged");
+        let packed = base64::engine::general_purpose::STANDARD.decode(body).map_err(|_| damaged())?;
+        let mut json = Vec::new();
+        flate2::read::ZlibDecoder::new(packed.as_slice()).take(SHARE_MAX).read_to_end(&mut json).map_err(|_| damaged())?;
+        serde_json::from_slice(&json).map_err(|_| damaged())
+    }
+}
+
 /// Whether `name` would do for a new theme: not empty, not taken (built-in
 /// or your own, ignoring case).
 pub fn check_name(name: &str, taken: &[String]) -> Result<()> {
@@ -551,6 +584,22 @@ mod tests {
         assert_eq!(json, "\"#01020380\"");
         assert_eq!(serde_json::from_str::<Hex>(&json).unwrap(), translucent);
         assert!(serde_json::from_str::<Hex>("\"red\"").is_err());
+    }
+
+    #[test]
+    fn share_codes_round_trip() {
+        for theme in builtins() {
+            let code = theme.share_code();
+            assert!(code.starts_with(SHARE_PREFIX));
+            assert_eq!(Theme::from_share_code(&code).unwrap(), theme);
+            // Wrapped by a chat, with spaces around.
+            let (head, tail) = code.split_at(code.len() / 2);
+            assert_eq!(Theme::from_share_code(&format!("  {head}\n{tail} ")).unwrap(), theme);
+        }
+        assert!(Theme::from_share_code("hello").is_err());
+        assert!(Theme::from_share_code("synththing-theme:not base64!").is_err());
+        let cut = dark().share_code();
+        assert!(Theme::from_share_code(&cut[..cut.len() - 4]).is_err());
     }
 
     #[test]

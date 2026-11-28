@@ -14,7 +14,7 @@ A music player for Windows (with Linux and Android builds, both experimental) th
 - A sprite editor for the pixel art scripts draw: paint, fill, lines, rectangles, flips, palettes and sprite sheets, written straight back into the script.
 - Record the visualizer with its sound to a video (MP4, 720p to 4K, vertical or any size, 30 or 60 fps): a whole song, a whole playlist, or whatever you play, live or rendered in the background frame by frame. Uses ffmpeg, which synththing offers to download the first time.
 - Rearrangeable layout: every section is a tab you can drag, split or pop out.
-- Themes: Dark, Light, Frutiger Aero and egui's own look, or make your own from any of them (every color, corners, borders, shadows), plus a UI scale.
+- Themes: Dark, Light, Frutiger Aero and egui's own look, or make your own from any of them (every color, corners, borders, shadows) and share it as a code to copy and paste, plus a UI scale.
 - A welcome window the first time, with a starter pack (two soundfonts and four songs) and a guided tour of the app.
 - A script library: find and install scripts other people have shared, publish your own (signed with a key the app makes; no account), and get updates to them. Anyone can run a library server (docs/DEPLOY.md).
 - Updates itself: new releases are offered in the app.

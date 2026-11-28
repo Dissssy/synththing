@@ -28,6 +28,9 @@ pub(super) struct ThemesState {
     /// Renaming the theme in use: the name being typed, and what's wrong
     /// with it.
     renaming: Option<(String, Option<String>)>,
+    /// Importing a theme: the share code being pasted, and what's wrong
+    /// with it.
+    importing: Option<(String, Option<String>)>,
     /// The UI scale while its slider is being dragged (applied on release,
     /// or the slider would rescale under the pointer).
     scale_drag: Option<f32>,
@@ -42,6 +45,8 @@ enum ThemeAction {
     SaveCopy,
     /// Drop the draft of a built-in theme.
     Discard,
+    /// Keep a theme from a share code as your own.
+    Import(Theme),
 }
 
 /// UI scale bounds and step.
@@ -248,6 +253,14 @@ impl App {
                 } else if ui.add(super::icon_button("copy")).on_hover_text(format!("Make your own theme, starting as a copy of {}", current.name)).clicked() {
                     action = Some(ThemeAction::Duplicate);
                 }
+                if ui.add(super::icon_button("share-network")).on_hover_text("Copy a share code: text anyone can paste into Import to get this theme").clicked() {
+                    ui.ctx().copy_text(current.share_code());
+                    self.status = format!("Copied {}'s share code.", current.name);
+                }
+                let importing = self.themes.importing.is_some();
+                if ui.add(super::icon_button("download-simple").selected(importing)).on_hover_text("Import a theme from a share code").clicked() {
+                    self.themes.importing = if importing { None } else { Some((String::new(), None)) };
+                }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| match &mut self.themes.renaming {
                     Some((text, _)) => {
                         let response = ui.add(egui::TextEdit::singleline(text).font(egui::TextStyle::Heading).desired_width(220.0));
@@ -275,6 +288,9 @@ impl App {
         if let Some((_, Some(error))) = &self.themes.renaming {
             ui.colored_label(ui.visuals().error_fg_color, error);
         }
+        if let Some(imported) = self.theme_import_ui(ui) {
+            action = Some(ThemeAction::Import(imported));
+        }
         if builtin {
             ui.weak(if changed {
                 "Built in: your changes show everywhere now, and are kept once you save them as a copy."
@@ -283,6 +299,34 @@ impl App {
             });
         }
         action
+    }
+
+    /// The field a share code is pasted into, while importing: the theme
+    /// it holds once Import is clicked (or Enter pressed), if it's one.
+    fn theme_import_ui(&mut self, ui: &mut egui::Ui) -> Option<Theme> {
+        let (code, error) = self.themes.importing.as_mut()?;
+        let mut submit = false;
+        ui.horizontal(|ui| {
+            let field = ui.add(egui::TextEdit::singleline(code).hint_text("Paste a theme's share code").desired_width(320.0));
+            submit = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            submit |= ui.add_enabled(!code.trim().is_empty(), egui::Button::new("Import")).clicked();
+        });
+        if let Some(error) = error {
+            ui.colored_label(ui.visuals().error_fg_color, error.as_str());
+        }
+        if !submit {
+            return None;
+        }
+        match Theme::from_share_code(code) {
+            Ok(imported) => {
+                self.themes.importing = None;
+                Some(imported)
+            }
+            Err(e) => {
+                *error = Some(format!("{e:#}"));
+                None
+            }
+        }
     }
 
     /// Rename the theme in use (your own) to `name`; or say why not, still
@@ -358,6 +402,14 @@ impl App {
             Some(ThemeAction::Discard) => {
                 let name = current.name.clone();
                 self.pick_theme(ctx, name);
+            }
+            Some(ThemeAction::Import(mut imported)) => {
+                let taken = self.theme_names();
+                if theme::check_name(&imported.name, &taken).is_err() {
+                    imported.name = theme::copy_name(imported.name.trim(), &taken);
+                }
+                self.status = format!("Imported the theme {}.", imported.name);
+                self.add_theme(ctx, imported);
             }
             Some(ThemeAction::Delete) => {
                 self.config.custom_themes.remove(&current.name);
